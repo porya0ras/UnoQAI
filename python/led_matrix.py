@@ -1,3 +1,5 @@
+import time
+
 from arduino.app_utils import Bridge
 
 
@@ -5,6 +7,7 @@ WIDTH = 13
 HEIGHT = 8
 BRIGHTNESS = 7
 FRAME_WORDS = 4
+SCROLL_DELAY_SECONDS = 0.12
 
 FONT_3X5 = {
     " ": ["000", "000", "000", "000", "000"],
@@ -52,16 +55,22 @@ FONT_3X5 = {
 
 
 def normalize_text(text):
-    return "".join(ch for ch in text.upper() if ch in FONT_3X5)[:3] or "?"
+    return "".join(ch for ch in text.upper() if ch in FONT_3X5) or "?"
 
 
-def text_to_pixels(text):
+def text_width(text):
+    glyph_width = 3
+    spacing = 1
+    return len(text) * glyph_width + max(0, len(text) - 1) * spacing
+
+
+def text_to_pixels(text, start_x=None):
     text = normalize_text(text)
     pixels = [[0 for _ in range(WIDTH)] for _ in range(HEIGHT)]
     glyph_width = 3
     spacing = 1
-    text_width = len(text) * glyph_width + max(0, len(text) - 1) * spacing
-    start_x = max(0, (WIDTH - text_width) // 2)
+    if start_x is None:
+        start_x = max(0, (WIDTH - text_width(text)) // 2)
     start_y = 1
 
     x = start_x
@@ -91,17 +100,37 @@ def pixels_to_frame_words(pixels):
     return frame_words
 
 
+def notify_frame(frame_words, label):
+    Bridge.notify("draw", frame_words)
+    print(f"Bridge notify draw {label} -> {[hex(word) for word in frame_words]}")
+
+
 def write_text(text):
     normalized = normalize_text(text)
-    pixels = text_to_pixels(normalized)
-    frame_words = pixels_to_frame_words(pixels)
-    active_pixels = sum(1 for value in pixels_to_board_bytes(pixels) if value)
-    Bridge.notify("draw", frame_words)
+    rendered_width = text_width(normalized)
+
+    if rendered_width <= WIDTH:
+        pixels = text_to_pixels(normalized)
+        frame_words = pixels_to_frame_words(pixels)
+        active_pixels = sum(1 for value in pixels_to_board_bytes(pixels) if value)
+        print(
+            f"LED text static text='{text}' normalized='{normalized}' "
+            f"active_pixels={active_pixels} words={len(frame_words)}"
+        )
+        notify_frame(frame_words, "static")
+        return normalized
+
+    total_frames = WIDTH + rendered_width + 1
     print(
-        f"Bridge notify draw text='{text}' normalized='{normalized}' "
-        f"active_pixels={active_pixels} words={len(frame_words)} -> "
-        f"{[hex(word) for word in frame_words]}"
+        f"LED text scroll text='{text}' normalized='{normalized}' "
+        f"width={rendered_width} frames={total_frames}"
     )
+    for frame_index in range(total_frames):
+        start_x = WIDTH - frame_index
+        frame_words = pixels_to_frame_words(text_to_pixels(normalized, start_x=start_x))
+        notify_frame(frame_words, f"scroll {frame_index + 1}/{total_frames}")
+        time.sleep(SCROLL_DELAY_SECONDS)
+
     return normalized
 
 

@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import threading
 from pathlib import Path
 
@@ -38,14 +39,15 @@ LED_CLIENT_TOOLS = [
             "Write short text on my Arduino UNO Q LED matrix. Use this whenever "
             "the user asks me to write, show, display, say, draw, or put letters "
             "or a word on my LEDs, matrix, face, light display, or little screen. "
-            "The matrix is tiny, so choose at most 3 visible characters."
+            "Pass the user's requested text exactly; the client will truncate or "
+            "scroll it to fit the tiny matrix."
         ),
         "parameters": {
             "type": "object",
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "The short text to show, for example HI, OK, YES, HOW.",
+                    "description": "The exact text the user asked to show, for example HI, OK, YES, HALEH.",
                 },
             },
             "required": ["text"],
@@ -65,6 +67,19 @@ LED_CLIENT_TOOLS = [
         },
     },
 ]
+
+LED_COMMAND_RE = re.compile(
+    r"\b(?:draw|write|show|display|say|put)\b.*?[`\"']([^`\"']+)[`\"']",
+    re.IGNORECASE,
+)
+
+
+def extract_direct_led_text(message):
+    match = LED_COMMAND_RE.search(message)
+    if match:
+        return match.group(1).strip()
+
+    return None
 
 
 def load_agent_state():
@@ -522,6 +537,17 @@ def on_chat_message(_sid, data):
         cancel_idle_memory_manager_check()
 
         print(f"User: {message}")
+
+        direct_led_text = extract_direct_led_text(message)
+        if direct_led_text:
+            rendered_text = led_matrix.write_text(direct_led_text)
+            answer = f"I displayed '{rendered_text}' on my LED matrix."
+            print(f"LED matrix direct text: {rendered_text}")
+            print(f"Agent: {answer}")
+            send_agent_response(answer)
+            schedule_memory_update(message, answer)
+            schedule_idle_memory_manager_check()
+            return
 
         answer = ask_letta(message)
 
