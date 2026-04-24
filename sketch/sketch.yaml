@@ -3,6 +3,7 @@ profiles:
     platforms:
       - platform: arduino:zephyr
     libraries:
+      - Arduino_LED_Matrix
       - Arduino_RouterBridge (0.3.0)
       - dependency: Arduino_RPClite (0.2.1)
       - dependency: ArxContainer (0.7.0)

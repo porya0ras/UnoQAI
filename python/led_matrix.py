@@ -1,7 +1,7 @@
 from arduino.app_utils import Bridge
 
 
-WIDTH = 13
+WIDTH = 12
 HEIGHT = 8
 BRIGHTNESS = 7
 

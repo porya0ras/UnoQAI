@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import threading
 from pathlib import Path
 
@@ -32,24 +31,40 @@ memory_manager_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
 
-LED_TEXT_PATTERNS = [
-    re.compile(
-        r"\b(?:write|display|show|say)\s+['\"]([^'\"]{1,12})['\"]",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:write|display|show|say)\s+['\"]?([a-zA-Z0-9!? .-]{1,12})['\"]?"
-        r"(?:\s+(?:on|in|to)\s+(?:(?:the|that)\s+)?"
-        r"(?:leds?|led\s+matrix|matrix|lights?))",
-        re.IGNORECASE,
-    ),
-    re.compile(
-        r"\b(?:leds?|led\s+matrix|matrix|lights?)\s+"
-        r"(?:write|display|show|say)\s+['\"]?([a-zA-Z0-9!? .-]{1,12})['\"]?",
-        re.IGNORECASE,
-    ),
+LED_CLIENT_TOOLS = [
+    {
+        "name": "write_led_matrix_text",
+        "description": (
+            "Write short text on my Arduino UNO Q LED matrix. Use this whenever "
+            "the user asks me to write, show, display, say, draw, or put letters "
+            "or a word on my LEDs, matrix, face, light display, or little screen. "
+            "The matrix is tiny, so choose at most 3 visible characters."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The short text to show, for example HI, OK, YES, HOW.",
+                },
+            },
+            "required": ["text"],
+        },
+    },
+    {
+        "name": "clear_led_matrix",
+        "description": (
+            "Clear or turn off my Arduino UNO Q LED matrix when the user asks "
+            "to clear, erase, switch off, or turn off the LEDs, matrix, face, "
+            "or light display."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {},
+            "required": [],
+        },
+    },
 ]
-LED_TEXT_STOP_WORDS = re.compile(r"\b(?:on|in|to|and|then|please)\b", re.IGNORECASE)
 
 
 def load_agent_state():
@@ -62,9 +77,9 @@ def load_agent_state():
         return state
 
     return {
-        "main_agent_id": "Q-Brain",
-        "memory_manager_agent_id": "Q-Dream",
-        "shared_memory_block_id": "layer0"
+        "main_agent_id": "agent-5d51ca51-0748-4ca2-8b60-e9fddd63ed1f",
+        "memory_manager_agent_id": "agent-710e803d-6b99-4763-966f-1f1e336227a0",
+        "shared_memory_block_id": "block-4e2e1613-2336-448b-b974-913840a3f540"
     }
 
 
@@ -132,7 +147,9 @@ def create_main_agent(shared_memory_block_id):
                 "label": "persona",
                 "value": (
                     "You are a small personal AI assistant running on Arduino UNO Q. "
-                    "Answer clearly and briefly. Ask one short question if needed."
+                    "Answer clearly and briefly. Ask one short question if needed. "
+                    "You can control your LED matrix with client-side tools when "
+                    "the user asks you to show text or clear your lights."
                 ),
             },
             {
@@ -263,57 +280,101 @@ def extract_response(response):
         return str(response)
 
 
-def send_message_to_agent(target_agent_id, message):
-    response = letta_client.agents.messages.create(
-        agent_id=target_agent_id,
-        messages=[
+def execute_led_client_tool(tool_name, arguments):
+    try:
+        if isinstance(arguments, str):
+            arguments = json.loads(arguments or "{}")
+
+        if tool_name == "write_led_matrix_text":
+            rendered_text = led_matrix.write_text(arguments.get("text", ""))
+            print(f"LED matrix text: {rendered_text}")
+            return f"Wrote '{rendered_text}' on my LED matrix.", "success"
+
+        if tool_name == "clear_led_matrix":
+            led_matrix.clear()
+            print("LED matrix cleared")
+            return "Cleared my LED matrix.", "success"
+
+        return f"Unknown client tool: {tool_name}", "error"
+
+    except Exception as e:
+        return str(e), "error"
+
+
+def get_message_type(message):
+    return getattr(message, "message_type", None) or getattr(message, "type", None)
+
+
+def get_tool_call_value(tool_call, key, default=None):
+    if isinstance(tool_call, dict):
+        return tool_call.get(key, default)
+
+    return getattr(tool_call, key, default)
+
+
+def resolve_client_tool_requests(target_agent_id, response, client_tools):
+    for _ in range(3):
+        approvals = []
+
+        for message in getattr(response, "messages", []):
+            if get_message_type(message) != "approval_request_message":
+                continue
+
+            tool_call = getattr(message, "tool_call", None)
+            if not tool_call:
+                continue
+
+            tool_name = get_tool_call_value(tool_call, "name")
+            tool_arguments = get_tool_call_value(tool_call, "arguments", "{}")
+            tool_call_id = get_tool_call_value(tool_call, "tool_call_id")
+            result, status = execute_led_client_tool(tool_name, tool_arguments)
+
+            approvals.append(
+                {
+                    "type": "tool",
+                    "tool_call_id": tool_call_id,
+                    "tool_return": result,
+                    "status": status,
+                }
+            )
+
+        if not approvals:
+            return response
+
+        response = letta_client.agents.messages.create(
+            agent_id=target_agent_id,
+            messages=[
+                {
+                    "type": "approval",
+                    "approvals": approvals,
+                }
+            ],
+            client_tools=client_tools,
+        )
+
+    return response
+
+
+def send_message_to_agent(target_agent_id, message, client_tools=None):
+    request = {
+        "agent_id": target_agent_id,
+        "messages": [
             {
                 "role": "user",
                 "content": message,
             }
         ],
-    )
+    }
+
+    if client_tools:
+        request["client_tools"] = client_tools
+
+    response = letta_client.agents.messages.create(**request)
+
+    if client_tools:
+        response = resolve_client_tool_requests(target_agent_id, response, client_tools)
 
     return extract_response(response)
-
-
-def parse_led_text_command(message):
-    has_led_target = re.search(
-        r"\b(?:leds?|led\s+matrix|matrix|lights?)\b",
-        message,
-        re.IGNORECASE,
-    )
-
-    if not has_led_target:
-        return None
-
-    for pattern in LED_TEXT_PATTERNS:
-        match = pattern.search(message)
-        if match:
-            text = LED_TEXT_STOP_WORDS.split(match.group(1), maxsplit=1)[0]
-            return text.strip(" '\"")
-
-    return None
-
-
-def apply_led_command_if_requested(message):
-    if re.search(
-        r"\b(?:clear|turn off|switch off)\b.*\b(?:leds?|led\s+matrix|matrix|lights?)\b",
-        message,
-        re.IGNORECASE,
-    ):
-        led_matrix.clear()
-        print("LED matrix cleared")
-        return "CLEARED"
-
-    led_text = parse_led_text_command(message)
-
-    if not led_text:
-        return None
-
-    rendered_text = led_matrix.write_text(led_text)
-    print(f"LED matrix text: {rendered_text}")
-    return rendered_text
 
 
 def ask_letta(message):
@@ -324,7 +385,16 @@ def ask_letta(message):
         main_agent_id = agents["main_agent_id"]
         memory_manager_agent_id = agents["memory_manager_agent_id"]
 
-    return send_message_to_agent(main_agent_id, message)
+    tool_context = (
+        "If the user asks me to control my LEDs, matrix, face, light display, "
+        "or little screen, use the available client-side LED tool. Do not give "
+        "Arduino code for that request."
+    )
+    return send_message_to_agent(
+        main_agent_id,
+        f"{tool_context}\n\nUser message: {message}",
+        client_tools=LED_CLIENT_TOOLS,
+    )
 
 
 def update_memory_in_background(user_message, assistant_response):
@@ -452,20 +522,6 @@ def on_chat_message(_sid, data):
         cancel_idle_memory_manager_check()
 
         print(f"User: {message}")
-
-        rendered_text = apply_led_command_if_requested(message)
-        if rendered_text:
-            if rendered_text == "CLEARED":
-                message = (
-                    f"{message}\n\n"
-                    "Hardware action completed: I cleared my Arduino UNO Q LED matrix."
-                )
-            else:
-                message = (
-                    f"{message}\n\n"
-                    f"Hardware action completed: I wrote '{rendered_text}' on my "
-                    "Arduino UNO Q LED matrix."
-                )
 
         answer = ask_letta(message)
 
