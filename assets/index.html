@@ -1,79 +1,416 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 
 <head>
-    <title>Letta Chat</title>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>UNO Q Letta Chat</title>
     <style>
+        :root {
+            color-scheme: light;
+            --bg: #eef2f6;
+            --panel: #ffffff;
+            --panel-soft: #f7f9fb;
+            --text: #17202a;
+            --muted: #687586;
+            --line: #dce3ea;
+            --accent: #0f766e;
+            --accent-strong: #115e59;
+            --agent: #ffffff;
+            --user: #e0f2fe;
+            --error: #b42318;
+            --shadow: 0 18px 48px rgba(23, 32, 42, 0.12);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
         body {
-            font-family: Arial, sans-serif;
-            padding: 20px;
-            max-width: 700px;
-            margin: auto;
+            margin: 0;
+            min-height: 100vh;
+            font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+            color: var(--text);
+            background:
+                radial-gradient(circle at top left, rgba(15, 118, 110, 0.12), transparent 34rem),
+                linear-gradient(135deg, #f8fafc 0%, var(--bg) 58%, #e6edf3 100%);
+        }
+
+        .app-shell {
+            width: min(960px, calc(100% - 32px));
+            min-height: 100vh;
+            margin: 0 auto;
+            display: grid;
+            align-content: center;
+            padding: 32px 0;
+        }
+
+        .chat-panel {
+            overflow: hidden;
+            border: 1px solid rgba(220, 227, 234, 0.9);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+        }
+
+        .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 20px 22px;
+            border-bottom: 1px solid var(--line);
+            background: linear-gradient(180deg, #ffffff 0%, #f7f9fb 100%);
+        }
+
+        .title-group {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-width: 0;
+        }
+
+        .mark {
+            width: 42px;
+            height: 42px;
+            display: grid;
+            place-items: center;
+            flex: 0 0 auto;
+            border-radius: 8px;
+            color: white;
+            font-weight: 800;
+            background: linear-gradient(135deg, var(--accent), #2563eb);
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 20px;
+            line-height: 1.2;
+            letter-spacing: 0;
+        }
+
+        .subtitle {
+            margin-top: 3px;
+            color: var(--muted);
+            font-size: 13px;
+        }
+
+        .status {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            min-width: max-content;
+            padding: 8px 10px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            color: var(--muted);
+            background: #ffffff;
+            font-size: 13px;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 999px;
+            background: #94a3b8;
+        }
+
+        .status.connected .status-dot {
+            background: #16a34a;
+        }
+
+        .status.error .status-dot {
+            background: var(--error);
+        }
+
+        .messages {
+            height: min(56vh, 520px);
+            min-height: 320px;
+            overflow-y: auto;
+            padding: 22px;
+            background: var(--panel-soft);
+        }
+
+        .empty-state {
+            height: 100%;
+            display: grid;
+            place-items: center;
+            text-align: center;
+            color: var(--muted);
+        }
+
+        .empty-state strong {
+            display: block;
+            margin-bottom: 6px;
+            color: var(--text);
+            font-size: 18px;
+        }
+
+        .message {
+            display: flex;
+            margin-bottom: 14px;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .bubble {
+            max-width: min(76%, 680px);
+            padding: 12px 14px;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            background: var(--agent);
+            line-height: 1.5;
+            white-space: pre-wrap;
+            overflow-wrap: anywhere;
+        }
+
+        .message.user .bubble {
+            border-color: #bae6fd;
+            background: var(--user);
+        }
+
+        .message.error .bubble {
+            border-color: #fecaca;
+            color: var(--error);
+            background: #fff7f7;
+        }
+
+        .composer {
+            display: grid;
+            grid-template-columns: 1fr auto;
+            gap: 12px;
+            padding: 16px;
+            border-top: 1px solid var(--line);
+            background: #ffffff;
+        }
+
+        .input-wrap {
+            min-width: 0;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 7px;
+            color: var(--muted);
+            font-size: 13px;
+            font-weight: 650;
         }
 
         textarea {
             width: 100%;
-            height: 90px;
-            font-size: 16px;
-            padding: 10px;
+            min-height: 52px;
+            max-height: 160px;
+            resize: vertical;
+            display: block;
+            border: 1px solid var(--line);
+            border-radius: 8px;
+            padding: 13px 14px;
+            color: var(--text);
+            background: #ffffff;
+            font: inherit;
+            line-height: 1.4;
+            outline: none;
+            transition: border-color 160ms ease, box-shadow 160ms ease;
+        }
+
+        textarea:focus {
+            border-color: rgba(15, 118, 110, 0.8);
+            box-shadow: 0 0 0 4px rgba(15, 118, 110, 0.12);
         }
 
         button {
-            margin-top: 10px;
-            padding: 10px 18px;
-            font-size: 16px;
+            align-self: end;
+            min-width: 108px;
+            height: 52px;
+            border: 0;
+            border-radius: 8px;
+            color: #ffffff;
+            background: var(--accent);
+            font: inherit;
+            font-weight: 750;
+            cursor: pointer;
+            transition: background 160ms ease, transform 120ms ease;
         }
 
-        #responseBox {
-            margin-top: 20px;
-            padding: 15px;
-            min-height: 120px;
-            border: 1px solid #ccc;
-            background: #f7f7f7;
-            white-space: pre-wrap;
+        button:hover {
+            background: var(--accent-strong);
+        }
+
+        button:active {
+            transform: translateY(1px);
+        }
+
+        button:disabled {
+            cursor: wait;
+            opacity: 0.72;
+        }
+
+        @media (max-width: 640px) {
+            .app-shell {
+                width: min(100% - 18px, 960px);
+                padding: 9px 0;
+                align-content: stretch;
+            }
+
+            .chat-panel {
+                min-height: calc(100vh - 18px);
+                display: grid;
+                grid-template-rows: auto 1fr auto;
+            }
+
+            .header {
+                align-items: flex-start;
+                flex-direction: column;
+                padding: 16px;
+            }
+
+            .messages {
+                height: auto;
+                min-height: 0;
+                padding: 16px;
+            }
+
+            .bubble {
+                max-width: 92%;
+            }
+
+            .composer {
+                grid-template-columns: 1fr;
+            }
+
+            button {
+                width: 100%;
+            }
         }
     </style>
 </head>
 
 <body>
-    <h2>UNO Q Letta Chat</h2>
+    <main class="app-shell">
+        <section class="chat-panel" aria-label="UNO Q Letta Chat">
+            <header class="header">
+                <div class="title-group">
+                    <div class="mark" aria-hidden="true">Q</div>
+                    <div>
+                        <h1>UNO Q Letta Chat</h1>
+                        <div class="subtitle">Personal assistant running through Arduino App Lab</div>
+                    </div>
+                </div>
+                <div id="status" class="status">
+                    <span class="status-dot"></span>
+                    <span id="statusText">Connecting</span>
+                </div>
+            </header>
 
-    <label>Your message</label>
-    <textarea id="chatInput" placeholder="Type message..."></textarea>
+            <div id="messages" class="messages" aria-live="polite">
+                <div id="emptyState" class="empty-state">
+                    <div>
+                        <strong>Ask anything</strong>
+                        <span>Your conversation will appear here.</span>
+                    </div>
+                </div>
+            </div>
 
-    <button onclick="sendMessage()">Send</button>
-
-    <h3>Agent Response</h3>
-    <div id="responseBox">Waiting...</div>
+            <form id="composer" class="composer">
+                <div class="input-wrap">
+                    <label for="chatInput">Your message</label>
+                    <textarea id="chatInput" placeholder="Type a message..." autocomplete="off"></textarea>
+                </div>
+                <button id="sendButton" type="submit">Send</button>
+            </form>
+        </section>
+    </main>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io(`http://${window.location.host}`);
+        const composer = document.getElementById("composer");
+        const input = document.getElementById("chatInput");
+        const messages = document.getElementById("messages");
+        const emptyState = document.getElementById("emptyState");
+        const sendButton = document.getElementById("sendButton");
+        const status = document.getElementById("status");
+        const statusText = document.getElementById("statusText");
+
+        function setStatus(text, state) {
+            statusText.innerText = text;
+            status.className = `status ${state || ""}`.trim();
+        }
+
+        function addMessage(role, text) {
+            if (emptyState) {
+                emptyState.remove();
+            }
+
+            const row = document.createElement("div");
+            row.className = `message ${role}`;
+
+            const bubble = document.createElement("div");
+            bubble.className = "bubble";
+            bubble.innerText = text;
+
+            row.appendChild(bubble);
+            messages.appendChild(row);
+            messages.scrollTop = messages.scrollHeight;
+        }
 
         function sendMessage() {
-            const text = document.getElementById("chatInput").value.trim();
+            const text = input.value.trim();
 
-            if (!text) {
+            if (!text || sendButton.disabled) {
                 return;
             }
 
-            document.getElementById("responseBox").innerText = "Thinking...";
+            addMessage("user", text);
+            input.value = "";
+            sendButton.disabled = true;
+            sendButton.innerText = "Sending";
 
             socket.emit("chat_message", {
                 message: text
             });
         }
 
+        composer.addEventListener("submit", function (event) {
+            event.preventDefault();
+            sendMessage();
+        });
+
+        input.addEventListener("keydown", function (event) {
+            if (event.key === "Enter" && !event.shiftKey) {
+                event.preventDefault();
+                sendMessage();
+            }
+        });
+
+        socket.on("connect", function () {
+            setStatus("Connected", "connected");
+        });
+
+        socket.on("disconnect", function () {
+            setStatus("Disconnected", "error");
+        });
+
         socket.on("agent_response", function (data) {
-            document.getElementById("responseBox").innerText = data.response;
+            addMessage("agent", data.response);
+            sendButton.disabled = false;
+            sendButton.innerText = "Send";
+            input.focus();
         });
 
         socket.on("agent_error", function (data) {
-            document.getElementById("responseBox").innerText = "Error: " + data.error;
+            addMessage("error", data.error);
+            sendButton.disabled = false;
+            sendButton.innerText = "Send";
         });
 
         socket.on("connect_error", function (error) {
-            document.getElementById("responseBox").innerText = "Socket error: " + error.message;
+            setStatus("Connection error", "error");
+            addMessage("error", "Socket error: " + error.message);
+            sendButton.disabled = false;
+            sendButton.innerText = "Send";
         });
     </script>
 </body>
