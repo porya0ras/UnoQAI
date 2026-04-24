@@ -307,11 +307,14 @@ def run_memory_manager_idle_check():
     send_message_to_agent(memory_manager_agent_id, prompt)
 
     question_prompt = (
-        "The user has been idle. Ask the user one short, natural question that "
-        "would help you learn useful durable information for future assistance. "
-        "Examples: ask what name they prefer, what this assistant's purpose should "
-        "be, or what project goal matters most. Ask only one question. Do not "
-        "mention background agents or memory blocks."
+        "The user has been idle. You are a small personal robot assistant trying "
+        "to understand your own identity, role, and place in the user's life. "
+        "Ask one short, warm question about yourself, from your point of view. "
+        "Good examples: 'What should my name be?', 'What should my main purpose "
+        "be for you?', 'What kind of little assistant do you want me to become?', "
+        "or 'When I wake up, what should I remember I am here to help with?' "
+        "Ask only one question. Do not mention background agents, memory blocks, "
+        "or internal systems."
     )
     question = send_message_to_agent(main_agent_id, question_prompt)
 
