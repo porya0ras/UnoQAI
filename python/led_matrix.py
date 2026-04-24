@@ -84,9 +84,12 @@ def pixels_to_board_bytes(pixels):
 
 def write_text(text):
     frame_bytes = pixels_to_board_bytes(text_to_pixels(text))
+    frame_bytes = pixels_to_board_bytes(text_to_pixels(text))
     Bridge.call("draw", frame_bytes)
     return normalize_text(text)
 
 
 def clear():
-    Bridge.call("draw", [0 for _ in range(WIDTH * HEIGHT)])
+    frame_bytes = [0 for _ in range(WIDTH * HEIGHT)]
+    Bridge.notify("draw", frame_bytes)
+    print(f"Bridge notify clear: bytes={len(frame_bytes)}")
