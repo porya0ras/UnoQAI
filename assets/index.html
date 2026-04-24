@@ -46,7 +46,7 @@
     <h3>Agent Response</h3>
     <div id="responseBox">Waiting...</div>
 
-    <script src="/socket.io/socket.io.js"></script>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
         const socket = io(`http://${window.location.host}`);
 
@@ -70,6 +70,10 @@
 
         socket.on("agent_error", function (data) {
             document.getElementById("responseBox").innerText = "Error: " + data.error;
+        });
+
+        socket.on("connect_error", function (error) {
+            document.getElementById("responseBox").innerText = "Socket error: " + error.message;
         });
     </script>
 </body>
