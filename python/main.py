@@ -39,7 +39,11 @@ def load_agent_state():
 
         return state
 
-    return {}
+    return {
+        "main_agent_id": "Q-Brain",
+        "memory_manager_agent_id": "Q-Dream",
+        "shared_memory_block_id": "layer0"
+    }
 
 
 def save_agent_state(state):
@@ -237,16 +241,9 @@ def extract_response(response):
         return str(response)
 
 
-def ask_letta(message):
-    global main_agent_id, memory_manager_agent_id
-
-    if main_agent_id is None or memory_manager_agent_id is None:
-        agents = get_or_create_agents()
-        main_agent_id = agents["main_agent_id"]
-        memory_manager_agent_id = agents["memory_manager_agent_id"]
-
+def send_message_to_agent(target_agent_id, message):
     response = letta_client.agents.messages.create(
-        agent_id=main_agent_id,
+        agent_id=target_agent_id,
         messages=[
             {
                 "role": "user",
@@ -256,6 +253,17 @@ def ask_letta(message):
     )
 
     return extract_response(response)
+
+
+def ask_letta(message):
+    global main_agent_id, memory_manager_agent_id
+
+    if main_agent_id is None or memory_manager_agent_id is None:
+        agents = get_or_create_agents()
+        main_agent_id = agents["main_agent_id"]
+        memory_manager_agent_id = agents["memory_manager_agent_id"]
+
+    return send_message_to_agent(main_agent_id, message)
 
 
 def update_memory_in_background(user_message, assistant_response):
@@ -272,22 +280,15 @@ def update_memory_in_background(user_message, assistant_response):
         "If nothing durable should be saved, make no memory changes."
     )
 
-    letta_client.agents.messages.create(
-        agent_id=memory_manager_agent_id,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
-    )
+    send_message_to_agent(memory_manager_agent_id, prompt)
 
 
 def run_memory_manager_idle_check():
-    global memory_manager_agent_id
+    global main_agent_id, memory_manager_agent_id
 
-    if memory_manager_agent_id is None:
+    if main_agent_id is None or memory_manager_agent_id is None:
         agents = get_or_create_agents()
+        main_agent_id = agents["main_agent_id"]
         memory_manager_agent_id = agents["memory_manager_agent_id"]
 
     prompt = (
@@ -303,16 +304,19 @@ def run_memory_manager_idle_check():
         "Do not answer the user directly."
     )
 
-    letta_client.agents.messages.create(
-        agent_id=memory_manager_agent_id,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt,
-            }
-        ],
+    send_message_to_agent(memory_manager_agent_id, prompt)
+
+    question_prompt = (
+        "The user has been idle. Ask the user one short, natural question that "
+        "would help you learn useful durable information for future assistance. "
+        "Examples: ask what name they prefer, what this assistant's purpose should "
+        "be, or what project goal matters most. Ask only one question. Do not "
+        "mention background agents or memory blocks."
     )
+    question = send_message_to_agent(main_agent_id, question_prompt)
+
     print("Memory manager idle self-check completed.")
+    send_agent_response(question)
 
 
 def schedule_memory_update(user_message, assistant_response):
