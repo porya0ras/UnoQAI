@@ -48,9 +48,9 @@
 
     <script src="/socket.io/socket.io.js"></script>
     <script>
-        const socket = typeof io === "function" ? io() : null;
+        const socket = io(`http://${window.location.host}`);
 
-        async function sendMessage() {
+        function sendMessage() {
             const text = document.getElementById("chatInput").value.trim();
 
             if (!text) {
@@ -59,44 +59,18 @@
 
             document.getElementById("responseBox").innerText = "Thinking...";
 
-            if (socket && socket.connected) {
-                socket.emit("chat_message", {
-                    message: text
-                });
-                return;
-            }
-
-            try {
-                const response = await fetch("/chat", {
-                    method: "POST",
-                    headers: {
-                        "Content-Type": "application/json"
-                    },
-                    body: JSON.stringify({
-                        message: text
-                    })
-                });
-                const data = await response.json();
-
-                if (!response.ok) {
-                    throw new Error(data.error || "Request failed");
-                }
-
-                document.getElementById("responseBox").innerText = data.response;
-            } catch (error) {
-                document.getElementById("responseBox").innerText = "Error: " + error.message;
-            }
-        }
-
-        if (socket) {
-            socket.on("agent_response", function (data) {
-                document.getElementById("responseBox").innerText = data.response;
-            });
-
-            socket.on("agent_error", function (data) {
-                document.getElementById("responseBox").innerText = "Error: " + data.error;
+            socket.emit("chat_message", {
+                message: text
             });
         }
+
+        socket.on("agent_response", function (data) {
+            document.getElementById("responseBox").innerText = data.response;
+        });
+
+        socket.on("agent_error", function (data) {
+            document.getElementById("responseBox").innerText = "Error: " + data.error;
+        });
     </script>
 </body>
 

@@ -1,3 +1,5 @@
 name: Drone 03
 icon: 🎛️
 description: A simple personal AI
+bricks:
+  - arduino:web_ui: {}
