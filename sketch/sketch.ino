@@ -1,28 +1,30 @@
 #include <Arduino_LED_Matrix.h>
 #include <Arduino_RouterBridge.h>
+#include <vector>
 
 Arduino_LED_Matrix matrix;
+
+void draw(std::vector<uint8_t> frame) {
+  if (frame.empty()) {
+    return;
+  }
+
+  matrix.draw(frame.data());
+}
+
+void clear_matrix() {
+  matrix.clear();
+}
+
 void setup() {
-     matrix.begin();
+  matrix.begin();
+  matrix.setGrayscaleBits(3);
   matrix.clear();
 
   Bridge.begin();
+  Bridge.provide("draw", draw);
+  Bridge.provide("clear", clear_matrix);
 }
 
-
-
 void loop() {
-
-    const uint32_t happy[] = {
-    0x19819,
-    0x80000001,
-    0x81f8000
-    };
-
-    matrix.loadFrame(happy);
-  delay(500);
-
-    matrix.clear();
-  delay(500);
-
 }

@@ -1,11 +1,14 @@
 import json
 import os
+import re
 import threading
 from pathlib import Path
 
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App
 from letta_client import Letta
+
+import led_matrix
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
@@ -28,6 +31,25 @@ main_agent_id = None
 memory_manager_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
+
+LED_TEXT_PATTERNS = [
+    re.compile(
+        r"\b(?:write|display|show|say)\s+['\"]([^'\"]{1,12})['\"]",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:write|display|show|say)\s+['\"]?([a-zA-Z0-9!? .-]{1,12})['\"]?"
+        r"(?:\s+(?:on|in|to)\s+(?:(?:the|that)\s+)?"
+        r"(?:leds?|led\s+matrix|matrix|lights?))",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:leds?|led\s+matrix|matrix|lights?)\s+"
+        r"(?:write|display|show|say)\s+['\"]?([a-zA-Z0-9!? .-]{1,12})['\"]?",
+        re.IGNORECASE,
+    ),
+]
+LED_TEXT_STOP_WORDS = re.compile(r"\b(?:on|in|to|and|then|please)\b", re.IGNORECASE)
 
 
 def load_agent_state():
@@ -255,6 +277,45 @@ def send_message_to_agent(target_agent_id, message):
     return extract_response(response)
 
 
+def parse_led_text_command(message):
+    has_led_target = re.search(
+        r"\b(?:leds?|led\s+matrix|matrix|lights?)\b",
+        message,
+        re.IGNORECASE,
+    )
+
+    if not has_led_target:
+        return None
+
+    for pattern in LED_TEXT_PATTERNS:
+        match = pattern.search(message)
+        if match:
+            text = LED_TEXT_STOP_WORDS.split(match.group(1), maxsplit=1)[0]
+            return text.strip(" '\"")
+
+    return None
+
+
+def apply_led_command_if_requested(message):
+    if re.search(
+        r"\b(?:clear|turn off|switch off)\b.*\b(?:leds?|led\s+matrix|matrix|lights?)\b",
+        message,
+        re.IGNORECASE,
+    ):
+        led_matrix.clear()
+        print("LED matrix cleared")
+        return "CLEARED"
+
+    led_text = parse_led_text_command(message)
+
+    if not led_text:
+        return None
+
+    rendered_text = led_matrix.write_text(led_text)
+    print(f"LED matrix text: {rendered_text}")
+    return rendered_text
+
+
 def ask_letta(message):
     global main_agent_id, memory_manager_agent_id
 
@@ -391,6 +452,20 @@ def on_chat_message(_sid, data):
         cancel_idle_memory_manager_check()
 
         print(f"User: {message}")
+
+        rendered_text = apply_led_command_if_requested(message)
+        if rendered_text:
+            if rendered_text == "CLEARED":
+                message = (
+                    f"{message}\n\n"
+                    "Hardware action completed: I cleared my Arduino UNO Q LED matrix."
+                )
+            else:
+                message = (
+                    f"{message}\n\n"
+                    f"Hardware action completed: I wrote '{rendered_text}' on my "
+                    "Arduino UNO Q LED matrix."
+                )
 
         answer = ask_letta(message)
 
