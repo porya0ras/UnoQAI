@@ -1,9 +1,10 @@
 from arduino.app_utils import Bridge
 
 
-WIDTH = 12
+WIDTH = 13
 HEIGHT = 8
 BRIGHTNESS = 7
+FRAME_WORDS = 4
 
 FONT_3X5 = {
     " ": ["000", "000", "000", "000", "000"],
@@ -82,14 +83,28 @@ def pixels_to_board_bytes(pixels):
     return [pixels[y][x] for y in range(HEIGHT) for x in range(WIDTH)]
 
 
+def pixels_to_frame_words(pixels):
+    frame_words = [0 for _ in range(FRAME_WORDS)]
+    for index, value in enumerate(pixels_to_board_bytes(pixels)):
+        if value:
+            frame_words[index // 32] |= 1 << (31 - (index % 32))
+    return frame_words
+
+
 def write_text(text):
-    frame_bytes = pixels_to_board_bytes(text_to_pixels(text))
-    frame_bytes = pixels_to_board_bytes(text_to_pixels(text))
-    Bridge.call("draw", frame_bytes)
-    return normalize_text(text)
+    normalized = normalize_text(text)
+    pixels = text_to_pixels(normalized)
+    frame_words = pixels_to_frame_words(pixels)
+    active_pixels = sum(1 for value in pixels_to_board_bytes(pixels) if value)
+    Bridge.notify("draw", frame_words)
+    print(
+        f"Bridge notify draw text='{text}' normalized='{normalized}' "
+        f"active_pixels={active_pixels} words={len(frame_words)} -> "
+        f"{[hex(word) for word in frame_words]}"
+    )
+    return normalized
 
 
 def clear():
-    frame_bytes = [0 for _ in range(WIDTH * HEIGHT)]
-    Bridge.notify("draw", frame_bytes)
-    print(f"Bridge notify clear: bytes={len(frame_bytes)}")
+    Bridge.notify("clear")
+    print(f"Bridge notify clear")

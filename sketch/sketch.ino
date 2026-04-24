@@ -1,23 +1,33 @@
-#include <Arduino_LED_Matrix.h>
-#include <Arduino_Monitor.h>
 #include <Arduino_RouterBridge.h>
-#include <zephyr/kernel.h>
+#include <Arduino_LED_Matrix.h>
 #include <vector>
+#include <zephyr/kernel.h>
 
 Arduino_LED_Matrix matrix;
 K_MUTEX_DEFINE(matrix_mtx);
 
-void draw(std::vector<uint8_t> frame) {
-  Monitor.print("MCU draw received bytes: ");
+constexpr size_t MATRIX_FRAME_WORDS = 4;
+
+void draw(std::vector<uint32_t> frame) {
+  Monitor.print("MCU draw received words: ");
   Monitor.println(frame.size());
 
-  if (frame.size() != 96) {
-    Monitor.println("MCU draw ignored: expected 96 bytes");
+  if (frame.size() != MATRIX_FRAME_WORDS) {
+    Monitor.println("MCU draw ignored: expected 4 words");
     return;
   }
 
+  uint32_t matrix_frame[MATRIX_FRAME_WORDS];
+  for (size_t i = 0; i < MATRIX_FRAME_WORDS; i++) {
+    matrix_frame[i] = frame[i];
+    Monitor.print("MCU frame[");
+    Monitor.print(i);
+    Monitor.print("] = 0x");
+    Monitor.println(matrix_frame[i], HEX);
+  }
+
   k_mutex_lock(&matrix_mtx, K_FOREVER);
-  matrix.draw(frame.data());
+  matrix.loadFrame(matrix_frame);
   k_mutex_unlock(&matrix_mtx);
 
   Monitor.println("MCU draw completed");
@@ -34,20 +44,20 @@ void clear_matrix() {
 }
 
 void setup() {
+
   matrix.begin();
-  matrix.setGrayscaleBits(3);
   matrix.clear();
 
-  Monitor.begin();
-  Monitor.println("MCU LED matrix sketch starting");
-
   Bridge.begin();
+
+  Monitor.begin();
+
   Bridge.provide("draw", draw);
   Bridge.provide("clear", clear_matrix);
 
-  Monitor.println("MCU Bridge providers ready: draw, clear");
+  Monitor.println("MCU LED matrix sketch starting");
+
 }
 
 void loop() {
-  delay(1);
 }
