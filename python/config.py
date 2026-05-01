@@ -12,7 +12,6 @@ MODEL = os.getenv("LETTA_MODEL", "openai/gpt-4o-mini")
 EMBEDDING = os.getenv("LETTA_EMBEDDING", "openai/text-embedding-3-small")
 SHARED_MEMORY_LIMIT = int(os.getenv("LETTA_SHARED_MEMORY_LIMIT", "5000"))
 MEMORY_MANAGER_IDLE_SECONDS = int(os.getenv("MEMORY_MANAGER_IDLE_SECONDS", "90"))
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.6"))
 
 letta_client = Letta(
     base_url=LETTA_BASE_URL,

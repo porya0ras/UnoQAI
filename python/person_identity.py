@@ -1,18 +1,16 @@
 """
 Person identity management backed by Letta shared memory.
 
-Supports multiple known people, each stored with a name and 128-d face
-encoding in the Letta `shared_user_memory` block.  When a new person is
-detected, the agent asks for their name; once provided, the face encoding
-and name are persisted so the person can be recognised automatically on
-subsequent detections.
+Supports multiple known people, each stored with a name and text description
+in the Letta ``shared_user_memory`` block.  The AI agent describes the person
+visually, and subsequent matches use the stored descriptions to identify
+returning individuals.
 """
 
 import json
 import re
 import time
 import threading
-import numpy as np
 
 from config import letta_client
 from letta_messaging import get_agents
@@ -30,7 +28,8 @@ KNOWN_PEOPLE_MARKER = "Known people:"
 
 state = {
     "pending_name": False,             # True while waiting for the user to type a name
-    "pending_encoding": None,          # The 128-d numpy encoding of the unidentified face
+    "pending_description": None,       # AI-generated description of the unidentified person
+    "pending_jpeg": None,              # JPEG bytes of the pending face (for re-describe)
     "last_ask_at": 0.0,                # Timestamp of the last "who is this?" prompt
     "last_announce_at": {},            # {name: timestamp} of last announcement per person
     "known_people_cache": None,        # Cached list of known people dicts
@@ -64,9 +63,10 @@ def update_shared_memory_value(value: str):
 def _parse_known_people(memory_text: str) -> list[dict]:
     """Parse the known-people JSON block from the shared memory text.
 
-    Expected format inside the memory block:
+    Expected format inside the memory block::
+
         - Known people:
-          [{"name": "Porya", "encoding": [0.01, ...]}, ...]
+          [{"name": "Porya", "description": "Male, dark hair, beard"}, ...]
     """
     marker_lower = KNOWN_PEOPLE_MARKER.lower()
     lines = memory_text.splitlines()
@@ -100,13 +100,10 @@ def _serialize_known_people(people: list[dict]) -> str:
     """Serialize the known-people list to a compact JSON string."""
     compact = []
     for p in people:
-        enc = p.get("encoding")
-        if enc is not None:
-            if isinstance(enc, np.ndarray):
-                enc = enc.tolist()
-            # Round to 4 decimal places to save memory space
-            enc = [round(float(v), 4) for v in enc]
-        compact.append({"name": p["name"], "encoding": enc})
+        compact.append({
+            "name": p["name"],
+            "description": p.get("description", ""),
+        })
     return json.dumps(compact, separators=(",", ":"))
 
 
@@ -165,7 +162,7 @@ def get_known_people() -> list[dict]:
             return state.get("known_people_cache") or []
 
 
-# ── Convenience accessors (backwards-compatible) ─────────────────────────────
+# ── Convenience accessors ─────────────────────────────────────────────────────
 
 def get_known_person_name() -> str | None:
     """Return the first known person's name (legacy single-person compat)."""
@@ -182,13 +179,16 @@ def is_waiting_for_name() -> bool:
         return bool(state.get("pending_name"))
 
 
-def get_pending_encoding() -> np.ndarray | None:
-    """Return the face encoding of the person we asked about."""
+def get_pending_description() -> str | None:
+    """Return the AI description of the person we asked about."""
     with _state_lock:
-        enc = state.get("pending_encoding")
-        if enc is not None:
-            return np.array(enc, dtype=np.float64)
-        return None
+        return state.get("pending_description")
+
+
+def get_pending_jpeg() -> bytes | None:
+    """Return the JPEG bytes of the pending (unidentified) person."""
+    with _state_lock:
+        return state.get("pending_jpeg")
 
 
 def should_ask_for_person_name() -> bool:
@@ -200,14 +200,15 @@ def should_ask_for_person_name() -> bool:
     return True
 
 
-def mark_asked_for_person_name(encoding: np.ndarray | None = None):
+def mark_asked_for_person_name(
+    description: str | None = None,
+    jpeg_bytes: bytes | None = None,
+):
     with _state_lock:
         state["pending_name"] = True
         state["last_ask_at"] = time.time()
-        if encoding is not None:
-            state["pending_encoding"] = encoding.tolist() if isinstance(encoding, np.ndarray) else encoding
-        else:
-            state["pending_encoding"] = None
+        state["pending_description"] = description
+        state["pending_jpeg"] = jpeg_bytes
 
 
 def should_announce_known_person(name: str) -> bool:
@@ -225,34 +226,27 @@ def mark_known_person_announced(name: str):
 
 # ── Save / learn ──────────────────────────────────────────────────────────────
 
-def save_detected_person(name: str, encoding: np.ndarray | None = None):
+def save_detected_person(name: str, description: str | None = None):
     """Save a newly-identified person to Letta memory.
 
-    If *encoding* is None, the pending encoding from the ask-flow is used.
+    If *description* is None, the pending description from the ask-flow is used.
     """
-    if encoding is None:
-        encoding = get_pending_encoding()
+    if description is None:
+        description = get_pending_description() or ""
 
     people = get_known_people()
-    entry = {"name": name}
-    if encoding is not None:
-        entry["encoding"] = (
-            encoding.tolist() if isinstance(encoding, np.ndarray) else list(encoding)
-        )
-    else:
-        entry["encoding"] = None
 
-    # Check if this person already exists (update encoding)
+    # Check if this person already exists (update description)
     found = False
     for p in people:
         if p.get("name", "").lower() == name.lower():
-            if entry["encoding"] is not None:
-                p["encoding"] = entry["encoding"]
+            if description:
+                p["description"] = description
             found = True
             break
 
     if not found:
-        people.append(entry)
+        people.append({"name": name, "description": description})
 
     _write_known_people_to_memory(people)
 
@@ -260,7 +254,8 @@ def save_detected_person(name: str, encoding: np.ndarray | None = None):
         state["known_people_cache"] = people
         state["last_cache_at"] = time.time()
         state["pending_name"] = False
-        state["pending_encoding"] = None
+        state["pending_description"] = None
+        state["pending_jpeg"] = None
         # Reset announce so the name gets said immediately
         if "last_announce_at" not in state:
             state["last_announce_at"] = {}

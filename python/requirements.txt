@@ -1,4 +1,2 @@
 letta-client
-face_recognition
-numpy
 Pillow
