@@ -37,11 +37,14 @@
         }
 
         .app-shell {
-            width: min(960px, calc(100% - 32px));
+            width: min(1100px, calc(100% - 32px));
             min-height: 100vh;
             margin: 0 auto;
             display: grid;
+            grid-template-columns: 1fr 320px;
+            gap: 24px;
             align-content: center;
+            align-items: start;
             padding: 32px 0;
         }
 
@@ -51,6 +54,25 @@
             border-radius: 8px;
             background: var(--panel);
             box-shadow: var(--shadow);
+        }
+
+        .side-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+        }
+
+        .camera-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 24px;
+            border: 1px solid rgba(220, 227, 234, 0.9);
+            border-radius: 8px;
+            background: var(--panel);
+            box-shadow: var(--shadow);
+            position: sticky;
+            top: 32px;
         }
 
         .header {
@@ -124,8 +146,8 @@
         }
 
         .messages {
-            height: min(56vh, 520px);
-            min-height: 320px;
+            height: min(70vh, 600px);
+            min-height: 400px;
             overflow-y: auto;
             padding: 22px;
             background: var(--panel-soft);
@@ -247,6 +269,15 @@
             opacity: 0.72;
         }
 
+        @media (max-width: 900px) {
+            .app-shell {
+                grid-template-columns: 1fr;
+            }
+            .camera-container {
+                position: static;
+            }
+        }
+
         @media (max-width: 640px) {
             .app-shell {
                 width: min(100% - 18px, 960px);
@@ -321,98 +352,23 @@
                 <button id="sendButton" type="submit">Send</button>
             </form>
         </section>
+
+        <aside class="side-panel">
+            <div id="cameraContainer" class="camera-container">
+                <div id="qrPlaceholder" style="display: flex; flex-direction: column; align-items: center; gap: 8px;">
+                    <span class="feedback-text" style="font-weight: 600;">Connect your phone camera</span>
+                    <span class="feedback-text" style="font-size: 12px;">Scan this QR code</span>
+                    <div id="qrCodeContainer"></div>
+                    <div id="qrSecretText" style="font-family: monospace; font-size: 14px; background: #fff; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--line);"></div>
+                </div>
+                <iframe id="dynamicIframe" title="Video stream" style="width: 100%; height: 280px; display: none; border: 0; border-radius: 8px;"></iframe>
+            </div>
+        </aside>
     </main>
 
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
-    <script>
-        const socket = io(`http://${window.location.host}`);
-        const composer = document.getElementById("composer");
-        const input = document.getElementById("chatInput");
-        const messages = document.getElementById("messages");
-        const emptyState = document.getElementById("emptyState");
-        const sendButton = document.getElementById("sendButton");
-        const status = document.getElementById("status");
-        const statusText = document.getElementById("statusText");
-
-        function setStatus(text, state) {
-            statusText.innerText = text;
-            status.className = `status ${state || ""}`.trim();
-        }
-
-        function addMessage(role, text) {
-            if (emptyState) {
-                emptyState.remove();
-            }
-
-            const row = document.createElement("div");
-            row.className = `message ${role}`;
-
-            const bubble = document.createElement("div");
-            bubble.className = "bubble";
-            bubble.innerText = text;
-
-            row.appendChild(bubble);
-            messages.appendChild(row);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        function sendMessage() {
-            const text = input.value.trim();
-
-            if (!text || sendButton.disabled) {
-                return;
-            }
-
-            addMessage("user", text);
-            input.value = "";
-            sendButton.disabled = true;
-            sendButton.innerText = "Sending";
-
-            socket.emit("chat_message", {
-                message: text
-            });
-        }
-
-        composer.addEventListener("submit", function (event) {
-            event.preventDefault();
-            sendMessage();
-        });
-
-        input.addEventListener("keydown", function (event) {
-            if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                sendMessage();
-            }
-        });
-
-        socket.on("connect", function () {
-            setStatus("Connected", "connected");
-        });
-
-        socket.on("disconnect", function () {
-            setStatus("Disconnected", "error");
-        });
-
-        socket.on("agent_response", function (data) {
-            addMessage("agent", data.response);
-            sendButton.disabled = false;
-            sendButton.innerText = "Send";
-            input.focus();
-        });
-
-        socket.on("agent_error", function (data) {
-            addMessage("error", data.error);
-            sendButton.disabled = false;
-            sendButton.innerText = "Send";
-        });
-
-        socket.on("connect_error", function (error) {
-            setStatus("Connection error", "error");
-            addMessage("error", "Socket error: " + error.message);
-            sendButton.disabled = false;
-            sendButton.innerText = "Send";
-        });
-    </script>
+    <script src="libs/qrcode.min.js"></script>
+    <script src="app.js"></script>
 </body>
 
 </html>

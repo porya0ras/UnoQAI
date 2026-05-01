@@ -86,13 +86,16 @@ def send_message_to_agent(target_agent_id, message, client_tools=None):
         response = resolve_client_tool_requests(target_agent_id, response, client_tools)
     return extract_response(response)
 
-def ask_letta(message):
+def ask_letta(message, vision_context=None):
     main_agent_id_val, _ = get_agents()
     tool_context = (
         "If the user asks me to control my LEDs, matrix, face, light display, "
         "or little screen, use the available client-side LED tool. Do not give "
         "Arduino code for that request."
     )
+    if vision_context:
+        tool_context += f"\n\n[System Info: The camera currently sees the following: {vision_context}]"
+        
     return send_message_to_agent(
         main_agent_id_val,
         f"{tool_context}\n\nUser message: {message}",

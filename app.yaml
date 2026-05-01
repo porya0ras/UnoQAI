@@ -1,5 +1,11 @@
 name: Drone 03
 icon: 🎛️
 description: A simple personal AI
+ports:
+  - 8080
 bricks:
   - arduino:web_ui: {}
+  - arduino:video_image_classification:
+      model: person-classification
+      devices:
+        - remote_camera_0
