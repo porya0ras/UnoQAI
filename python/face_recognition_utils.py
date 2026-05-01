@@ -1,11 +1,11 @@
 """
-Vision-based person identification using the Letta agent (OpenAI GPT-4o vision).
+Vision-based person identification using the Letta agent (OpenAI GPT-4o).
 
-Sends camera frames AND saved reference photos of known people to the AI
-in a single multimodal message — the AI does image-to-image comparison
-(like a visual RAG: reference images are the "retrieved" context).
+Visual RAG approach: saved reference thumbnails of known people (stored as
+base64 in Letta memory) are sent alongside new camera frames to the AI in
+a single multimodal message for image-to-image comparison.
 
-No dlib, cmake, or face_recognition library needed.
+Everything lives in Letta memory — no files on disk.
 """
 
 import base64
@@ -16,8 +16,13 @@ try:
 except ImportError:
     Image = None
 
-from config import letta_client, KNOWN_FACES_DIR
+from config import letta_client
 from letta_messaging import get_agents
+
+# Thumbnail size for reference images stored in memory.
+# 80x80 quality-30 JPEG ≈ 600-900 bytes → ~800-1200 base64 chars per person.
+THUMB_SIZE = 80
+THUMB_QUALITY = 30
 
 
 def is_available() -> bool:
@@ -34,7 +39,7 @@ def jpeg_bytes_to_base64(jpeg_bytes: bytes) -> str | None:
 
 
 def resize_for_vision(jpeg_bytes: bytes, max_width: int = 512) -> bytes:
-    """Downscale a JPEG to reduce token usage on the vision API."""
+    """Downscale a JPEG for sending to the vision API."""
     if not Image or not jpeg_bytes:
         return jpeg_bytes
     try:
@@ -51,42 +56,21 @@ def resize_for_vision(jpeg_bytes: bytes, max_width: int = 512) -> bytes:
         return jpeg_bytes
 
 
-def save_person_image(name: str, jpeg_bytes: bytes) -> str | None:
-    """Save a person's reference photo to disk.
+def make_thumbnail_b64(jpeg_bytes: bytes) -> str | None:
+    """Create a tiny thumbnail and return as raw base64 (no data URI prefix).
 
-    Args:
-        name: Person's name (used as filename).
-        jpeg_bytes: Raw JPEG image data.
-
-    Returns:
-        The filename saved, or None on failure.
+    The thumbnail is small enough to store inside the Letta memory block.
     """
-    if not jpeg_bytes:
+    if not Image or not jpeg_bytes:
         return None
-    # Sanitise name for filesystem
-    safe_name = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in name)
-    safe_name = safe_name.strip().replace(" ", "_").lower()
-    filename = f"{safe_name}.jpg"
-    filepath = KNOWN_FACES_DIR / filename
     try:
-        resized = resize_for_vision(jpeg_bytes, max_width=512)
-        filepath.write_bytes(resized)
-        print(f"[vision] Saved reference photo: {filepath}")
-        return filename
-    except Exception as exc:
-        print(f"[vision] Failed to save reference photo: {exc}")
-        return None
-
-
-def load_person_image(filename: str) -> bytes | None:
-    """Load a person's reference photo from disk."""
-    filepath = KNOWN_FACES_DIR / filename
-    try:
-        if filepath.exists():
-            return filepath.read_bytes()
+        img = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
+        img.thumbnail((THUMB_SIZE, THUMB_SIZE), Image.LANCZOS)
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=THUMB_QUALITY)
+        return base64.b64encode(buf.getvalue()).decode("utf-8")
     except Exception:
-        pass
-    return None
+        return None
 
 
 def _extract_response_text(response) -> str | None:
@@ -101,15 +85,11 @@ def _extract_response_text(response) -> str | None:
 
 
 def identify_person(jpeg_bytes: bytes, known_people: list[dict]) -> str | None:
-    """Send new photo + all reference photos to AI for visual comparison.
-
-    This is the core RAG-style identification: the AI sees the saved
-    reference images of each known person alongside the new camera frame,
-    and determines who (if anyone) the new person is.
+    """Send new photo + all reference thumbnails to AI for visual comparison.
 
     Args:
         jpeg_bytes: New camera frame (JPEG bytes).
-        known_people: List of dicts with ``name`` and ``image_file`` keys.
+        known_people: List with ``name`` and ``image_b64`` keys.
 
     Returns:
         Matched person's name, or None if unknown.
@@ -117,114 +97,84 @@ def identify_person(jpeg_bytes: bytes, known_people: list[dict]) -> str | None:
     if not jpeg_bytes or not known_people:
         return None
 
-    # Build multimodal content: reference images + new image
     content_parts = []
-
-    # First: text instruction
     names_list = ", ".join(p.get("name", "?") for p in known_people)
     content_parts.append({
         "type": "text",
         "text": (
-            "[SYSTEM — vision identification task, do NOT reply to the user]\n"
-            f"I have reference photos of these known people: {names_list}.\n"
-            "The reference photos are labeled below. After them is a NEW "
-            "camera photo. Compare the person in the NEW photo against the "
-            "reference photos.\n"
-            "If the person matches one of them, respond with ONLY their name "
-            "(exactly as labeled). If no match, respond with exactly: UNKNOWN\n"
-            "Do not add any other text."
+            "[SYSTEM — vision identification, do NOT reply to the user]\n"
+            f"Known people: {names_list}.\n"
+            "Below are their reference photos, then a NEW camera photo.\n"
+            "If the NEW photo matches a known person, respond with ONLY "
+            "their name. Otherwise respond: UNKNOWN\n"
+            "No other text."
         ),
     })
 
-    # Add each known person's reference image
     ref_count = 0
     for person in known_people:
-        img_file = person.get("image_file")
+        b64 = person.get("image_b64")
         name = person.get("name", "?")
-        if not img_file:
+        if not b64:
             continue
-        img_bytes = load_person_image(img_file)
-        if not img_bytes:
-            continue
-        data_uri = jpeg_bytes_to_base64(img_bytes)
-        if not data_uri:
-            continue
-        # Label before each reference image
         content_parts.append({
             "type": "text",
-            "text": f"Reference photo of {name}:",
+            "text": f"[{name}]:",
         })
         content_parts.append({
             "type": "image",
-            "source": {"type": "url", "url": data_uri},
+            "source": {"type": "url", "url": f"data:image/jpeg;base64,{b64}"},
         })
         ref_count += 1
 
     if ref_count == 0:
         return None
 
-    # Add the new camera frame
     new_resized = resize_for_vision(jpeg_bytes)
-    new_data_uri = jpeg_bytes_to_base64(new_resized)
-    if not new_data_uri:
+    new_uri = jpeg_bytes_to_base64(new_resized)
+    if not new_uri:
         return None
 
-    content_parts.append({
-        "type": "text",
-        "text": "NEW camera photo (identify this person):",
-    })
+    content_parts.append({"type": "text", "text": "NEW photo:"})
     content_parts.append({
         "type": "image",
-        "source": {"type": "url", "url": new_data_uri},
+        "source": {"type": "url", "url": new_uri},
     })
 
     main_agent_id, _ = get_agents()
-
     try:
         response = letta_client.agents.messages.create(
             agent_id=main_agent_id,
             messages=[{"role": "user", "content": content_parts}],
         )
-        result_text = _extract_response_text(response)
-        if not result_text:
+        result = _extract_response_text(response)
+        if not result:
             return None
-
-        result_text = result_text.strip().strip('"\'.')
-
-        if result_text.upper() == "UNKNOWN":
+        result = result.strip().strip('"\'.')
+        if result.upper() == "UNKNOWN":
             return None
-
-        # Exact match
-        for person in known_people:
-            if person.get("name", "").lower() == result_text.lower():
-                return person["name"]
-        # Fuzzy: name contained in response
-        for person in known_people:
-            if person.get("name", "").lower() in result_text.lower():
-                return person["name"]
-
+        for p in known_people:
+            if p.get("name", "").lower() == result.lower():
+                return p["name"]
+        for p in known_people:
+            if p.get("name", "").lower() in result.lower():
+                return p["name"]
         return None
     except Exception as exc:
-        print(f"[vision] Failed to identify person: {exc}")
+        print(f"[vision] Identify failed: {exc}")
         return None
 
 
 def describe_person(jpeg_bytes: bytes) -> str | None:
-    """Ask the AI to describe a person's appearance from a camera frame.
-
-    Returns:
-        Short text description, or None on failure.
-    """
+    """Ask the AI to describe a person's appearance."""
     if not jpeg_bytes:
         return None
-
     resized = resize_for_vision(jpeg_bytes)
     data_uri = jpeg_bytes_to_base64(resized)
     if not data_uri:
         return None
 
     main_agent_id, _ = get_agents()
-
     try:
         response = letta_client.agents.messages.create(
             agent_id=main_agent_id,
@@ -235,10 +185,9 @@ def describe_person(jpeg_bytes: bytes) -> str | None:
                         "type": "text",
                         "text": (
                             "[SYSTEM — vision task, do NOT reply to the user]\n"
-                            "Describe ONLY this person's distinctive visual "
-                            "features in one short sentence (hair, facial hair, "
-                            "glasses, age, clothing). No names. Under 30 words. "
-                            "Respond with ONLY the description."
+                            "Describe ONLY this person's distinctive features "
+                            "in one short sentence (hair, facial hair, glasses, "
+                            "age, clothing). No names. Under 30 words."
                         ),
                     },
                     {
@@ -250,5 +199,5 @@ def describe_person(jpeg_bytes: bytes) -> str | None:
         )
         return _extract_response_text(response)
     except Exception as exc:
-        print(f"[vision] Failed to describe person: {exc}")
+        print(f"[vision] Describe failed: {exc}")
         return None

@@ -1,13 +1,12 @@
 """
-Person identity management backed by Letta shared memory + image files on disk.
+Person identity management — everything in Letta shared memory.
 
-Each known person is stored with:
+Each known person is stored as JSON with:
 - name: their name
-- description: AI-generated text description of their appearance
-- image_file: filename of their reference photo in known_faces/
+- description: AI-generated text description
+- image_b64: base64-encoded thumbnail (80x80 JPEG) of their face
 
-The Letta shared_user_memory block stores the compact JSON metadata.
-The actual images live on disk in KNOWN_FACES_DIR.
+No files on disk — all data lives in the Letta memory block.
 """
 
 import json
@@ -18,7 +17,7 @@ import threading
 from config import letta_client
 from letta_messaging import get_agents
 
-# ── Constants ────────────────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────
 
 ASK_COOLDOWN_SECONDS = 120
 ANNOUNCE_COOLDOWN_SECONDS = 30
@@ -26,7 +25,7 @@ CACHE_SECONDS = 10
 SHARED_MEMORY_LABEL = "shared_user_memory"
 KNOWN_PEOPLE_MARKER = "Known people:"
 
-# ── Module-level state ───────────────────────────────────────────────────────
+# ── State ──────────────────────────────────────────────────────────────
 
 state = {
     "pending_name": False,
@@ -39,7 +38,7 @@ state = {
 }
 _state_lock = threading.Lock()
 
-# ── Letta memory I/O ─────────────────────────────────────────────────────────
+# ── Letta memory I/O ──────────────────────────────────────────────────
 
 def get_shared_memory_value() -> str:
     main_agent_id, _ = get_agents()
@@ -51,10 +50,11 @@ def get_shared_memory_value() -> str:
 def update_shared_memory_value(value: str):
     main_agent_id, _ = get_agents()
     letta_client.agents.blocks.update(
-        agent_id=main_agent_id, block_label=SHARED_MEMORY_LABEL, value=value,
+        agent_id=main_agent_id, block_label=SHARED_MEMORY_LABEL,
+        value=value,
     )
 
-# ── Parse / serialize known people ────────────────────────────────────────────
+# ── Parse / serialize ─────────────────────────────────────────────────
 
 def _parse_known_people(memory_text: str) -> list[dict]:
     marker_lower = KNOWN_PEOPLE_MARKER.lower()
@@ -62,12 +62,11 @@ def _parse_known_people(memory_text: str) -> list[dict]:
     for i, line in enumerate(lines):
         stripped = line.strip().lstrip("-* ").strip()
         if stripped.lower().startswith(marker_lower):
-            after_marker = stripped[len(KNOWN_PEOPLE_MARKER):].strip()
-            if after_marker:
-                json_text = after_marker
-            elif i + 1 < len(lines):
-                json_text = lines[i + 1].strip()
-            else:
+            after = stripped[len(KNOWN_PEOPLE_MARKER):].strip()
+            json_text = after if after else (
+                lines[i + 1].strip() if i + 1 < len(lines) else ""
+            )
+            if not json_text:
                 return []
             for end in range(i + 1, len(lines) + 1):
                 try:
@@ -88,8 +87,8 @@ def _serialize_known_people(people: list[dict]) -> str:
         entry = {"name": p["name"]}
         if p.get("description"):
             entry["description"] = p["description"]
-        if p.get("image_file"):
-            entry["image_file"] = p["image_file"]
+        if p.get("image_b64"):
+            entry["image_b64"] = p["image_b64"]
         compact.append(entry)
     return json.dumps(compact, separators=(",", ":"))
 
@@ -111,7 +110,7 @@ def _write_known_people_to_memory(people: list[dict]):
             continue
         if skip_json:
             s = line.strip()
-            if s.startswith("[") or s.startswith("{") or s.startswith("]") or s.startswith('"'):
+            if s and s[0] in '[{]"':
                 continue
             skip_json = False
         output_lines.append(line)
@@ -124,7 +123,7 @@ def _write_known_people_to_memory(people: list[dict]):
 
     update_shared_memory_value("\n".join(output_lines).strip())
 
-# ── Read known people ─────────────────────────────────────────────────────────
+# ── Read ───────────────────────────────────────────────────────────────
 
 def get_known_people() -> list[dict]:
     with _state_lock:
@@ -133,14 +132,13 @@ def get_known_people() -> list[dict]:
             if cached is not None:
                 return cached
     try:
-        memory_text = get_shared_memory_value()
-        people = _parse_known_people(memory_text)
+        people = _parse_known_people(get_shared_memory_value())
         with _state_lock:
             state["known_people_cache"] = people
             state["last_cache_at"] = time.time()
         return people
     except Exception as exc:
-        print(f"Could not read known people from Letta memory: {exc}")
+        print(f"Could not read known people: {exc}")
         with _state_lock:
             return state.get("known_people_cache") or []
 
@@ -148,7 +146,7 @@ def get_known_person_name() -> str | None:
     people = get_known_people()
     return people[0].get("name") if people else None
 
-# ── Ask / announce flow ───────────────────────────────────────────────────────
+# ── Ask / announce flow ────────────────────────────────────────────────
 
 def is_waiting_for_name() -> bool:
     with _state_lock:
@@ -184,41 +182,41 @@ def mark_known_person_announced(name: str):
     with _state_lock:
         state.setdefault("last_announce_at", {})[name] = time.time()
 
-# ── Save / learn ──────────────────────────────────────────────────────────────
+# ── Save / learn ───────────────────────────────────────────────────────
 
-def save_detected_person(name: str, description=None, image_file=None):
-    """Save a newly-identified person with their reference photo."""
+def save_detected_person(name: str, description=None):
+    """Save a person with their thumbnail stored in Letta memory."""
     import face_recognition_utils
 
     if description is None:
         description = get_pending_description() or ""
 
-    # Save the reference image to disk
-    if image_file is None:
-        jpeg_bytes = get_pending_jpeg()
-        if jpeg_bytes:
-            image_file = face_recognition_utils.save_person_image(name, jpeg_bytes)
+    # Create thumbnail from pending JPEG and store as base64
+    image_b64 = None
+    jpeg_bytes = get_pending_jpeg()
+    if jpeg_bytes:
+        image_b64 = face_recognition_utils.make_thumbnail_b64(jpeg_bytes)
 
     people = get_known_people()
 
-    # Update existing or append new
     found = False
     for p in people:
         if p.get("name", "").lower() == name.lower():
             if description:
                 p["description"] = description
-            if image_file:
-                p["image_file"] = image_file
+            if image_b64:
+                p["image_b64"] = image_b64
             found = True
             break
     if not found:
         people.append({
             "name": name,
             "description": description,
-            "image_file": image_file or "",
+            "image_b64": image_b64 or "",
         })
 
     _write_known_people_to_memory(people)
+    print(f"[identity] Saved {name} with thumbnail in Letta memory")
 
     with _state_lock:
         state["known_people_cache"] = people
@@ -228,7 +226,7 @@ def save_detected_person(name: str, description=None, image_file=None):
         state["pending_jpeg"] = None
         state.setdefault("last_announce_at", {})[name] = 0.0
 
-# ── Name extraction ──────────────────────────────────────────────────────────
+# ── Name extraction ───────────────────────────────────────────────────
 
 def extract_person_name(message: str) -> str | None:
     text = message.strip()
@@ -241,11 +239,11 @@ def extract_person_name(message: str) -> str | None:
     for pattern in patterns:
         match = re.match(pattern, text, flags=re.IGNORECASE)
         if match:
-            return clean_person_name(match.group(1))
-    return clean_person_name(text)
+            return _clean(match.group(1))
+    return _clean(text)
 
-def clean_person_name(raw_name: str) -> str | None:
-    name = raw_name.strip().strip(".!?,;:")
+def _clean(raw: str) -> str | None:
+    name = raw.strip().strip(".!?,;:")
     if not name:
         return None
     words = name.split()
