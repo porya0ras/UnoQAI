@@ -10,6 +10,8 @@ const qrCodeContainer = document.getElementById('qrCodeContainer');
 const qrSecretText = document.getElementById('qrSecretText');
 const dynamicIframe = document.getElementById('dynamicIframe');
 const qrPlaceholder = document.getElementById('qrPlaceholder');
+const personOverlay = document.getElementById('personOverlay');
+const cameraFrame = document.querySelector('.camera-frame');
 
 const currentHostname = window.location.hostname;
 const streamUrl = `http://${currentHostname}:4912/embed`;
@@ -39,6 +41,7 @@ function generateQRCode(secret, protocol, ip, port) {
 function updateCameraDisplay() {
     if (webcamState.status === "streaming" || webcamState.status === "connected") {
         qrPlaceholder.style.display = 'none';
+        cameraFrame.style.display = 'block';
         dynamicIframe.style.display = 'block';
         if (webcamState.status === "streaming" && !dynamicIframe.src) {
             const host = webcamState.ip || window.location.hostname;
@@ -46,6 +49,8 @@ function updateCameraDisplay() {
         }
     } else {
         qrPlaceholder.style.display = 'flex';
+        cameraFrame.style.display = 'none';
+        updatePersonOverlay([]);
         dynamicIframe.style.display = 'none';
         dynamicIframe.removeAttribute('src');
         if (webcamState.secret && typeof QRCode !== 'undefined') {
@@ -61,6 +66,45 @@ function updateCameraStatus(state, data = {}) {
     if (data.ip) webcamState.ip = data.ip;
     if (data.port) webcamState.port = data.port;
     updateCameraDisplay();
+}
+
+function parseSocketPayload(data) {
+    const raw = data && Object.prototype.hasOwnProperty.call(data, "message") ? data.message : data;
+    if (typeof raw !== "string") {
+        return raw;
+    }
+    try {
+        return JSON.parse(raw);
+    } catch (_error) {
+        return raw;
+    }
+}
+
+function formatConfidence(confidence) {
+    if (typeof confidence !== "number") {
+        return "";
+    }
+    return ` ${Math.round(confidence * 100)}%`;
+}
+
+function updatePersonOverlay(classifications) {
+    if (!personOverlay || !Array.isArray(classifications)) {
+        return;
+    }
+
+    const person = classifications.find((entry) => {
+        return String(entry.content || "").toLowerCase() === "person";
+    });
+
+    if (!person) {
+        personOverlay.style.display = "none";
+        personOverlay.textContent = "";
+        return;
+    }
+
+    const label = person.label || person.content || "Person";
+    personOverlay.textContent = `${label}${formatConfidence(person.confidence)}`;
+    personOverlay.style.display = "block";
 }
 
 function setStatus(text, state) {
@@ -127,6 +171,7 @@ socket.on('connected', (data) => updateCameraStatus('connected', data));
 socket.on('streaming', (data) => updateCameraStatus('streaming', data));
 socket.on('paused', (data) => updateCameraStatus('paused', data));
 socket.on('disconnected', (data) => updateCameraStatus('disconnected', data));
+socket.on('classifications', (data) => updatePersonOverlay(parseSocketPayload(data)));
 
 socket.on("agent_response", function (data) {
     addMessage("agent", data.response);
