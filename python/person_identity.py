@@ -1,39 +1,47 @@
+"""
+Person identity management backed by Letta shared memory.
+
+Supports multiple known people, each stored with a name and 128-d face
+encoding in the Letta `shared_user_memory` block.  When a new person is
+detected, the agent asks for their name; once provided, the face encoding
+and name are persisted so the person can be recognised automatically on
+subsequent detections.
+"""
+
+import json
 import re
 import time
+import threading
+import numpy as np
 
 from config import letta_client
 from letta_messaging import get_agents
 
 
-ASK_COOLDOWN_SECONDS = 120
-ANNOUNCE_COOLDOWN_SECONDS = 45
-CACHE_SECONDS = 10
+# ── Constants ────────────────────────────────────────────────────────────────
+
+ASK_COOLDOWN_SECONDS = 120        # Don't re-ask for a name within this window
+ANNOUNCE_COOLDOWN_SECONDS = 30    # Don't repeat "I see X" too often
+CACHE_SECONDS = 10                # How long to cache known-people from Letta
 SHARED_MEMORY_LABEL = "shared_user_memory"
-PERSON_MEMORY_PREFIX = "Camera person identity:"
+KNOWN_PEOPLE_MARKER = "Known people:"
+
+# ── Module-level state ───────────────────────────────────────────────────────
 
 state = {
-    "pending_name": False,
-    "last_ask_at": 0.0,
-    "last_announce_at": 0.0,
-    "known_person_name_cache": None,
+    "pending_name": False,             # True while waiting for the user to type a name
+    "pending_encoding": None,          # The 128-d numpy encoding of the unidentified face
+    "last_ask_at": 0.0,                # Timestamp of the last "who is this?" prompt
+    "last_announce_at": {},            # {name: timestamp} of last announcement per person
+    "known_people_cache": None,        # Cached list of known people dicts
     "last_cache_at": 0.0,
 }
+_state_lock = threading.Lock()
 
 
-def get_known_person_name():
-    if time.time() - state.get("last_cache_at", 0.0) < CACHE_SECONDS:
-        return state.get("known_person_name_cache")
-    try:
-        name = read_person_name_from_memory()
-        state["known_person_name_cache"] = name
-        state["last_cache_at"] = time.time()
-        return name
-    except Exception as exc:
-        print(f"Could not read person identity from Letta memory: {exc}")
-        return state.get("known_person_name_cache")
+# ── Letta memory I/O ─────────────────────────────────────────────────────────
 
-
-def get_shared_memory_value():
+def get_shared_memory_value() -> str:
     main_agent_id, _ = get_agents()
     block = letta_client.agents.blocks.retrieve(
         agent_id=main_agent_id,
@@ -42,7 +50,7 @@ def get_shared_memory_value():
     return getattr(block, "value", "") or ""
 
 
-def update_shared_memory_value(value):
+def update_shared_memory_value(value: str):
     main_agent_id, _ = get_agents()
     letta_client.agents.blocks.update(
         agent_id=main_agent_id,
@@ -51,68 +59,217 @@ def update_shared_memory_value(value):
     )
 
 
-def read_person_name_from_memory():
-    memory_value = get_shared_memory_value()
-    prefix = PERSON_MEMORY_PREFIX.lower()
-    for line in memory_value.splitlines():
-        normalized = line.strip().lstrip("-* ").strip()
-        if normalized.lower().startswith(prefix):
-            name = normalized[len(PERSON_MEMORY_PREFIX):].strip()
-            return name or None
+# ── Read / write known people from Letta memory ──────────────────────────────
+
+def _parse_known_people(memory_text: str) -> list[dict]:
+    """Parse the known-people JSON block from the shared memory text.
+
+    Expected format inside the memory block:
+        - Known people:
+          [{"name": "Porya", "encoding": [0.01, ...]}, ...]
+    """
+    marker_lower = KNOWN_PEOPLE_MARKER.lower()
+    lines = memory_text.splitlines()
+    for i, line in enumerate(lines):
+        stripped = line.strip().lstrip("-* ").strip()
+        if stripped.lower().startswith(marker_lower):
+            # The JSON array may start on the same line or the next line
+            after_marker = stripped[len(KNOWN_PEOPLE_MARKER):].strip()
+            if after_marker:
+                json_text = after_marker
+            elif i + 1 < len(lines):
+                json_text = lines[i + 1].strip()
+            else:
+                return []
+            # Collect multi-line JSON until we parse a valid list
+            for end in range(i + 1, len(lines) + 1):
+                try:
+                    data = json.loads(json_text)
+                    if isinstance(data, list):
+                        return data
+                except (json.JSONDecodeError, ValueError):
+                    if end < len(lines):
+                        json_text += "\n" + lines[end].strip()
+                    else:
+                        break
+            return []
+    return []
+
+
+def _serialize_known_people(people: list[dict]) -> str:
+    """Serialize the known-people list to a compact JSON string."""
+    compact = []
+    for p in people:
+        enc = p.get("encoding")
+        if enc is not None:
+            if isinstance(enc, np.ndarray):
+                enc = enc.tolist()
+            # Round to 4 decimal places to save memory space
+            enc = [round(float(v), 4) for v in enc]
+        compact.append({"name": p["name"], "encoding": enc})
+    return json.dumps(compact, separators=(",", ":"))
+
+
+def _write_known_people_to_memory(people: list[dict]):
+    """Replace the known-people section in Letta memory with *people*."""
+    memory_text = get_shared_memory_value()
+    people_json = _serialize_known_people(people)
+    new_section = f"- {KNOWN_PEOPLE_MARKER}\n  {people_json}"
+
+    # Try to replace existing section
+    marker_lower = KNOWN_PEOPLE_MARKER.lower()
+    output_lines = []
+    skip_json = False
+    replaced = False
+    for line in memory_text.splitlines():
+        stripped = line.strip().lstrip("-* ").strip()
+        if stripped.lower().startswith(marker_lower):
+            output_lines.append(new_section)
+            replaced = True
+            skip_json = True
+            continue
+        if skip_json:
+            # Skip old JSON continuation lines (indented or starting with '[')
+            s = line.strip()
+            if s.startswith("[") or s.startswith("{") or s.startswith("]") or s.startswith('"'):
+                continue
+            skip_json = False
+        output_lines.append(line)
+
+    if not replaced:
+        if output_lines and any(l.strip() for l in output_lines):
+            output_lines.append(new_section)
+        else:
+            output_lines = [new_section]
+
+    update_shared_memory_value("\n".join(output_lines).strip())
+
+
+def get_known_people() -> list[dict]:
+    """Return the list of known people (cached)."""
+    with _state_lock:
+        if time.time() - state.get("last_cache_at", 0.0) < CACHE_SECONDS:
+            cached = state.get("known_people_cache")
+            if cached is not None:
+                return cached
+    try:
+        memory_text = get_shared_memory_value()
+        people = _parse_known_people(memory_text)
+        with _state_lock:
+            state["known_people_cache"] = people
+            state["last_cache_at"] = time.time()
+        return people
+    except Exception as exc:
+        print(f"Could not read known people from Letta memory: {exc}")
+        with _state_lock:
+            return state.get("known_people_cache") or []
+
+
+# ── Convenience accessors (backwards-compatible) ─────────────────────────────
+
+def get_known_person_name() -> str | None:
+    """Return the first known person's name (legacy single-person compat)."""
+    people = get_known_people()
+    if people:
+        return people[0].get("name")
     return None
 
 
-def write_person_name_to_memory(name):
-    memory_value = get_shared_memory_value()
-    person_line = f"- {PERSON_MEMORY_PREFIX} {name}"
-    lines = []
-    replaced = False
-    prefix = PERSON_MEMORY_PREFIX.lower()
+# ── Ask / announce flow ───────────────────────────────────────────────────────
 
-    for line in memory_value.splitlines():
-        normalized = line.strip().lstrip("-* ").strip()
-        if normalized.lower().startswith(prefix):
-            if not replaced:
-                lines.append(person_line)
-                replaced = True
-            continue
-        lines.append(line)
+def is_waiting_for_name() -> bool:
+    with _state_lock:
+        return bool(state.get("pending_name"))
 
-    if not replaced:
-        if lines and any(line.strip() for line in lines):
-            lines.append(person_line)
+
+def get_pending_encoding() -> np.ndarray | None:
+    """Return the face encoding of the person we asked about."""
+    with _state_lock:
+        enc = state.get("pending_encoding")
+        if enc is not None:
+            return np.array(enc, dtype=np.float64)
+        return None
+
+
+def should_ask_for_person_name() -> bool:
+    with _state_lock:
+        if state.get("pending_name"):
+            return False
+    if time.time() - state.get("last_ask_at", 0.0) < ASK_COOLDOWN_SECONDS:
+        return False
+    return True
+
+
+def mark_asked_for_person_name(encoding: np.ndarray | None = None):
+    with _state_lock:
+        state["pending_name"] = True
+        state["last_ask_at"] = time.time()
+        if encoding is not None:
+            state["pending_encoding"] = encoding.tolist() if isinstance(encoding, np.ndarray) else encoding
         else:
-            lines = [person_line]
-
-    update_shared_memory_value("\n".join(lines).strip())
+            state["pending_encoding"] = None
 
 
-def is_waiting_for_name():
-    return bool(state.get("pending_name"))
+def should_announce_known_person(name: str) -> bool:
+    with _state_lock:
+        last = state.get("last_announce_at", {}).get(name, 0.0)
+    return time.time() - last >= ANNOUNCE_COOLDOWN_SECONDS
 
 
-def should_ask_for_person_name():
-    if get_known_person_name() or state.get("pending_name"):
-        return False
-    return time.time() - state.get("last_ask_at", 0.0) >= ASK_COOLDOWN_SECONDS
+def mark_known_person_announced(name: str):
+    with _state_lock:
+        if "last_announce_at" not in state:
+            state["last_announce_at"] = {}
+        state["last_announce_at"][name] = time.time()
 
 
-def mark_asked_for_person_name():
-    state["pending_name"] = True
-    state["last_ask_at"] = time.time()
+# ── Save / learn ──────────────────────────────────────────────────────────────
+
+def save_detected_person(name: str, encoding: np.ndarray | None = None):
+    """Save a newly-identified person to Letta memory.
+
+    If *encoding* is None, the pending encoding from the ask-flow is used.
+    """
+    if encoding is None:
+        encoding = get_pending_encoding()
+
+    people = get_known_people()
+    entry = {"name": name}
+    if encoding is not None:
+        entry["encoding"] = (
+            encoding.tolist() if isinstance(encoding, np.ndarray) else list(encoding)
+        )
+    else:
+        entry["encoding"] = None
+
+    # Check if this person already exists (update encoding)
+    found = False
+    for p in people:
+        if p.get("name", "").lower() == name.lower():
+            if entry["encoding"] is not None:
+                p["encoding"] = entry["encoding"]
+            found = True
+            break
+
+    if not found:
+        people.append(entry)
+
+    _write_known_people_to_memory(people)
+
+    with _state_lock:
+        state["known_people_cache"] = people
+        state["last_cache_at"] = time.time()
+        state["pending_name"] = False
+        state["pending_encoding"] = None
+        # Reset announce so the name gets said immediately
+        if "last_announce_at" not in state:
+            state["last_announce_at"] = {}
+        state["last_announce_at"][name] = 0.0
 
 
-def should_announce_known_person():
-    if not get_known_person_name():
-        return False
-    return time.time() - state.get("last_announce_at", 0.0) >= ANNOUNCE_COOLDOWN_SECONDS
+# ── Name extraction from user message ────────────────────────────────────────
 
-
-def mark_known_person_announced():
-    state["last_announce_at"] = time.time()
-
-
-def extract_person_name(message):
+def extract_person_name(message: str) -> str | None:
     text = message.strip()
     patterns = [
         r"^(?:this|that|he|she|they|it)\s+is\s+(.+)$",
@@ -127,7 +284,7 @@ def extract_person_name(message):
     return clean_person_name(text)
 
 
-def clean_person_name(raw_name):
+def clean_person_name(raw_name: str) -> str | None:
     name = raw_name.strip().strip(".!?,;:")
     if not name:
         return None
@@ -135,11 +292,3 @@ def clean_person_name(raw_name):
     if len(words) > 4 or len(name) > 48:
         return None
     return " ".join(word[:1].upper() + word[1:] for word in words)
-
-
-def save_detected_person_name(name):
-    write_person_name_to_memory(name)
-    state["known_person_name_cache"] = name
-    state["last_cache_at"] = time.time()
-    state["pending_name"] = False
-    state["last_announce_at"] = 0.0

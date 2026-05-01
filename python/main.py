@@ -9,17 +9,20 @@ from arduino.app_bricks.video_imageclassification import VideoImageClassificatio
 from arduino.app_peripherals.camera import WebSocketCamera
 from person_identity import (
     extract_person_name,
-    get_known_person_name,
+    get_known_people,
     is_waiting_for_name,
+    get_pending_encoding,
     mark_asked_for_person_name,
     mark_known_person_announced,
-    save_detected_person_name,
+    save_detected_person,
     should_announce_known_person,
     should_ask_for_person_name,
 )
+import face_recognition_utils
 import secrets
 import string
 import json
+import threading
 
 def generate_secret() -> str:
     characters = string.digits
@@ -30,6 +33,42 @@ camera = WebSocketCamera(secret=secret, encrypt=True)
 detection_stream = VideoImageClassification(camera, confidence=0.5, debounce_sec=0.0)
 
 current_vision_classes = []
+_face_lock = threading.Lock()
+
+
+def _try_identify_person() -> tuple[str | None, object]:
+    """Grab a frame from the camera, extract a face encoding, and try to match.
+
+    Returns:
+        (matched_name_or_None, face_encoding_or_None)
+    """
+    if not face_recognition_utils.is_available():
+        return None, None
+
+    try:
+        frame = camera.capture()
+        if frame is None:
+            return None, None
+
+        # compress_to_jpeg is used internally by the camera loop; we do the
+        # same here to get raw JPEG bytes for face_recognition.
+        from arduino.app_utils.image.adjustments import compress_to_jpeg
+        jpeg_bytes = compress_to_jpeg(frame)
+        if jpeg_bytes is None:
+            return None, None
+        jpeg_bytes = jpeg_bytes.tobytes()
+    except Exception as exc:
+        print(f"[face] Frame capture error: {exc}")
+        return None, None
+
+    encoding = face_recognition_utils.encode_face_from_jpeg(jpeg_bytes)
+    if encoding is None:
+        return None, None
+
+    known_people = get_known_people()
+    matched_name = face_recognition_utils.find_best_match(encoding, known_people)
+    return matched_name, encoding
+
 
 def handle_detections(classifications: dict):
     global current_vision_classes
@@ -37,42 +76,67 @@ def handle_detections(classifications: dict):
         current_vision_classes = []
     else:
         current_vision_classes = list(classifications.keys())
-    
+
     person_detected = False
     person_confidence = None
-    known_person_name = get_known_person_name()
-    entries = []
     for key, value in classifications.items():
         if key.lower() == "person":
             person_detected = True
             person_confidence = value
-        entries.append({
-            "content": key,
-            "confidence": value,
-            "label": known_person_name if key.lower() == "person" and known_person_name else key,
-        })
-    if entries:
-        ui.send_message("classifications", message=json.dumps(entries))
-    else:
-        ui.send_message("classifications", message=json.dumps([]))
 
+    # ── Build overlay entries ─────────────────────────────────────────────
     if not person_detected:
+        # Send non-person classifications as-is
+        entries = [
+            {"content": k, "confidence": v, "label": k}
+            for k, v in classifications.items()
+        ]
+        ui.send_message("classifications", message=json.dumps(entries if entries else []))
         return
 
-    if known_person_name:
-        if should_announce_known_person():
-            mark_known_person_announced()
+    # ── Person detected → try face recognition ───────────────────────────
+    # Use a lock to prevent overlapping face-recognition work
+    if not _face_lock.acquire(blocking=False):
+        return
+    try:
+        matched_name, encoding = _try_identify_person()
+    finally:
+        _face_lock.release()
+
+    # ── Build overlay with person label ───────────────────────────────────
+    label = matched_name or "Unknown"
+    entries = []
+    for key, value in classifications.items():
+        if key.lower() == "person":
+            entries.append({
+                "content": key,
+                "confidence": value,
+                "label": label,
+            })
+        else:
+            entries.append({
+                "content": key,
+                "confidence": value,
+                "label": key,
+            })
+    ui.send_message("classifications", message=json.dumps(entries))
+
+    # ── React: announce known person or ask for name ──────────────────────
+    if matched_name:
+        if should_announce_known_person(matched_name):
+            mark_known_person_announced(matched_name)
             confidence_text = (
                 f" ({person_confidence:.0%} confidence)"
                 if isinstance(person_confidence, (int, float))
                 else ""
             )
-            send_agent_response(f"I see {known_person_name}{confidence_text}.")
+            send_agent_response(f"I see {matched_name}{confidence_text}.")
         return
 
+    # Unknown face (or no face_recognition library) → ask for name
     if should_ask_for_person_name():
-        mark_asked_for_person_name()
-        send_agent_response("I see a person. What is their name?")
+        mark_asked_for_person_name(encoding)
+        send_agent_response("I see a person I don't recognise. What is their name?")
 
 def handle_camera_status(evt_type, data):
     ui.send_message(evt_type, data)
@@ -108,9 +172,9 @@ def on_chat_message(_sid, data):
                 send_agent_response("Please tell me just the person's name.")
                 schedule_idle_memory_manager_check()
                 return
-            save_detected_person_name(name)
+            save_detected_person(name)
             answer = f"I will remember this person as {name}."
-            print(f"Saved detected person name in Letta memory: {name}")
+            print(f"Saved detected person in Letta memory: {name}")
             print(f"Agent: {answer}")
             send_agent_response(answer)
             ui.send_message(
@@ -155,6 +219,7 @@ def on_chat_message(_sid, data):
 print("Starting UNO Q WebUI Letta app...")
 print(f"Letta URL: {LETTA_BASE_URL}")
 print(f"Memory manager idle check: {MEMORY_MANAGER_IDLE_SECONDS}s")
+print(f"Face recognition available: {face_recognition_utils.is_available()}")
 print("Initializing Letta agents...")
 main_agent_id, memory_manager_agent_id = get_agents()
 print(f"Letta main agent: {main_agent_id}")

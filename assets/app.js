@@ -92,18 +92,22 @@ function updatePersonOverlay(classifications) {
         return;
     }
 
-    const person = classifications.find((entry) => {
+    const persons = classifications.filter((entry) => {
         return String(entry.content || "").toLowerCase() === "person";
     });
 
-    if (!person) {
+    if (persons.length === 0) {
         personOverlay.style.display = "none";
         personOverlay.textContent = "";
         return;
     }
 
-    const label = person.label || person.content || "Person";
-    personOverlay.textContent = `${label}${formatConfidence(person.confidence)}`;
+    const labels = persons.map((p) => {
+        const label = p.label || "Unknown";
+        const conf = formatConfidence(p.confidence);
+        return `${label}${conf}`;
+    });
+    personOverlay.textContent = labels.join(" · ");
     personOverlay.style.display = "block";
 }
 
