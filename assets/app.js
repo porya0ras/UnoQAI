@@ -41,8 +41,8 @@ function updateCameraDisplay() {
         qrPlaceholder.style.display = 'none';
         dynamicIframe.style.display = 'block';
         if (webcamState.status === "streaming" && !dynamicIframe.src) {
-            const port = webcamState.port || 4912;
-            dynamicIframe.src = `http://${currentHostname}:${port}/embed`;
+            const host = webcamState.ip || window.location.hostname;
+            dynamicIframe.src = `http://${host}:4912/embed`;
         }
     } else {
         qrPlaceholder.style.display = 'flex';
