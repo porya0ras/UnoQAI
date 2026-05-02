@@ -1,13 +1,12 @@
+
 import json
-import re
 import threading
 import config
+import skill_loader
 
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App
 from letta_client import Letta
-
-import led_matrix
 
 
 ui = WebUI()
@@ -127,6 +126,7 @@ def attach_shared_memory(agent_id, block_id):
 
 
 def create_main_agent(shared_memory_block_id):
+    skill_blocks = skill_loader.load_project_skills();
     agent = letta_client.agents.create(
         name="uno-q-webui-agent",
         model=config.MODEL,
@@ -160,6 +160,7 @@ def create_main_agent(shared_memory_block_id):
                     "Do not store secrets unless the user explicitly asks."
                 ),
             },
+            *skill_blocks,
         ],
         tools=[
             "conversation_search",
@@ -383,7 +384,6 @@ def ask_letta(message):
     return send_message_to_agent(
         main_agent_id,
         f"{tool_context}\n\nUser message: {message}",
-        client_tools=LED_CLIENT_TOOLS,
     )
 
 

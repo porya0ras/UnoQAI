@@ -5,6 +5,7 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 AGENT_FILE = ROOT_DIR / "agent_state.json"
+SKILLS_ROOT = Path(__file__).parent / ".agents" / "skills"
 
 LETTA_BASE_URL = os.getenv("LETTA_BASE_URL", "http://192.168.1.80:8283")
 LETTA_API_KEY = os.getenv("LETTA_API_KEY", "test")
