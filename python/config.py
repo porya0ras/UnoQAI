@@ -1,10 +1,11 @@
-
 from pathlib import Path
 import os
 
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
+PYTHON_DIR = Path(__file__).resolve().parent
 AGENT_FILE = ROOT_DIR / "agent_state.json"
+CLIENT_TOOLS_FILE = PYTHON_DIR / "client_tools.json"
 
 LETTA_BASE_URL = os.getenv("LETTA_BASE_URL", "http://192.168.1.80:8283")
 LETTA_API_KEY = os.getenv("LETTA_API_KEY", "test")

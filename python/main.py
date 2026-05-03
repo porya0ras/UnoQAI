@@ -20,41 +20,23 @@ memory_manager_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
 
-LED_CLIENT_TOOLS = [
-    {
-        "name": "write_led_matrix_text",
-        "description": (
-            "Write short text on my Arduino UNO Q LED matrix. Use this whenever "
-            "the user asks me to write, show, display, say, draw, or put letters "
-            "or a word on my LEDs, matrix, face, light display, or little screen. "
-            "Pass the user's requested text exactly; the client will truncate or "
-            "scroll it to fit the tiny matrix."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "The exact text the user asked to show, for example HI, OK, YES, HALEH.",
-                },
-            },
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "clear_led_matrix",
-        "description": (
-            "Clear or turn off my Arduino UNO Q LED matrix when the user asks "
-            "to clear, erase, switch off, or turn off the LEDs, matrix, face, "
-            "or light display."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-]
+
+def load_client_tools():
+    with config.CLIENT_TOOLS_FILE.open() as tools_file:
+        tools = json.load(tools_file)
+
+    if not isinstance(tools, list):
+        raise ValueError(f"{config.CLIENT_TOOLS_FILE} must contain a JSON array")
+
+    for tool in tools:
+        if not isinstance(tool, dict):
+            raise ValueError("Each client tool must be a JSON object")
+
+        if "name" not in tool or "description" not in tool or "parameters" not in tool:
+            raise ValueError("Each client tool must include name, description, and parameters")
+
+    return tools
+
 
 def load_agent_state():
     if config.AGENT_FILE.exists():
@@ -382,7 +364,7 @@ def ask_letta(message):
     return send_message_to_agent(
         main_agent_id,
         f"{tool_context}\n\nUser message: {message}",
-        client_tools=LED_CLIENT_TOOLS,
+        client_tools=load_client_tools(),
     )
 
 
