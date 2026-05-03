@@ -119,8 +119,6 @@ def create_main_agent(shared_memory_block_id):
                 "value": (
                     "You are a small personal AI assistant running on Arduino UNO Q. "
                     "Answer clearly and briefly. Ask one short question if needed. "
-                    "You can control your LED matrix with client-side tools when "
-                    "the user asks you to show text or clear your lights."
                 ),
             },
             {
@@ -141,6 +139,16 @@ def create_main_agent(shared_memory_block_id):
                     "Do not store secrets unless the user explicitly asks."
                 ),
             },
+            {
+                "label": "tool_usage_policy",
+                "value": (
+                    "Use client tools for controlling LEDs, matrix, face, light "
+                    "display, or little screen. Do not give Arduino code for those "
+                    "requests. If the user asks you to control your LEDs, matrix, "
+                    "face, light display, or little screen, use the available "
+                    "client-side LED tool. Do not give Arduino code for that request."
+                 ),
+            }
         ],
         tools=[
             "conversation_search",
