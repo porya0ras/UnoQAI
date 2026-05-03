@@ -1,6 +1,5 @@
 
-
-from cairo import Path
+from pathlib import Path
 import os
 
 
