@@ -56,20 +56,6 @@ LED_CLIENT_TOOLS = [
     },
 ]
 
-LED_COMMAND_RE = re.compile(
-    r"\b(?:draw|write|show|display|say|put)\b.*?[`\"']([^`\"']+)[`\"']",
-    re.IGNORECASE,
-)
-
-
-def extract_direct_led_text(message):
-    match = LED_COMMAND_RE.search(message)
-    if match:
-        return match.group(1).strip()
-
-    return None
-
-
 def load_agent_state():
     if config.AGENT_FILE.exists():
         state = json.loads(config.AGENT_FILE.read_text())
@@ -525,17 +511,6 @@ def on_chat_message(_sid, data):
         cancel_idle_memory_manager_check()
 
         print(f"User: {message}")
-
-        direct_led_text = extract_direct_led_text(message)
-        if direct_led_text:
-            rendered_text = led_matrix.write_text(direct_led_text)
-            answer = f"I displayed '{rendered_text}' on my LED matrix."
-            print(f"LED matrix direct text: {rendered_text}")
-            print(f"Agent: {answer}")
-            send_agent_response(answer)
-            schedule_memory_update(message, answer)
-            schedule_idle_memory_manager_check()
-            return
 
         answer = ask_letta(message)
 
