@@ -288,7 +288,7 @@ def resolve_client_tool_requests(target_agent_id, response, client_tools):
             tool_name = get_tool_call_value(tool_call, "name")
             tool_arguments = get_tool_call_value(tool_call, "arguments", "{}")
             tool_call_id = get_tool_call_value(tool_call, "tool_call_id")
-            result, status = toolHnadler.execute_led_client_tool(tool_name, tool_arguments)
+            result, status = toolHnadler.execute_tool(tool_name, tool_arguments)
 
             approvals.append(
                 {
