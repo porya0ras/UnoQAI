@@ -23,5 +23,23 @@
       "properties": {},
       "required": []
     }
+  },
+  {
+    "name": "get_camera_status",
+    "description": "Read the current status of the camera (e.g., active, idle, error).",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "get_latest_detections",
+    "description": "Retrieve the latest objects detected by the vision system.",
+    "parameters": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
   }
 ]

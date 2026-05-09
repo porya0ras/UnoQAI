@@ -17,6 +17,7 @@ letta_client = Letta(
 )
 main_agent_id = None
 memory_manager_agent_id = None
+vision_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
 
@@ -50,6 +51,7 @@ def load_agent_state():
     return {
         "main_agent_id": "agent-5d51ca51-0748-4ca2-8b60-e9fddd63ed1f",
         "memory_manager_agent_id": "agent-710e803d-6b99-4763-966f-1f1e336227a0",
+        "vision_agent_id": "agent-vision-placeholder-id",
         "shared_memory_block_id": "block-4e2e1613-2336-448b-b974-913840a3f540"
     }
 
@@ -193,6 +195,48 @@ def create_memory_manager_agent(shared_memory_block_id):
     return agent.id
 
 
+def create_vision_agent(shared_memory_block_id):
+    agent = letta_client.agents.create(
+        name="Q-Eye",
+        model=config.MODEL,
+        embedding=config.EMBEDDING,
+        block_ids=[shared_memory_block_id],
+        memory_blocks=[
+            {
+                "label": "persona",
+                "value": (
+                    "You are Q-Eye, a Vision monitoring agent. Your role is to "
+                    "monitor camera status and analyze detected objects. "
+                    "You should not process frames one by one, but focus on "
+                    "making high-level decisions and identifying important events. "
+                    "Only pass critical events to the main agent."
+                ),
+            },
+            {
+                "label": "human_profile",
+                "value": (
+                    "Use shared_user_memory for durable user facts and project "
+                    "context."
+                ),
+            },
+            {
+                "label": "vision_policy",
+                "value": (
+                    "Report only significant visual events (e.g., a person recognized, "
+                    "an object out of place, camera failure). Avoid spamming the "
+                    "main agent with constant updates."
+                ),
+            }
+        ],
+        tools=[
+            "conversation_search",
+        ],
+    )
+
+    print(f"Created vision agent: {agent.id}")
+    return agent.id
+
+
 def get_or_create_main_agent(state, shared_memory_block_id):
     saved_agent_id = state.get("main_agent_id")
 
@@ -229,6 +273,24 @@ def get_or_create_memory_manager_agent(state, shared_memory_block_id):
     return created_agent_id
 
 
+def get_or_create_vision_agent(state, shared_memory_block_id):
+    saved_agent_id = state.get("vision_agent_id")
+
+    if saved_agent_id:
+        try:
+            letta_client.agents.retrieve(agent_id=saved_agent_id)
+            attach_shared_memory(saved_agent_id, shared_memory_block_id)
+            print(f"Using existing vision agent: {saved_agent_id}")
+            return saved_agent_id
+        except Exception:
+            print("Existing vision_agent_id invalid. Creating new agent...")
+
+    created_agent_id = create_vision_agent(shared_memory_block_id)
+    state["vision_agent_id"] = created_agent_id
+    save_agent_state(state)
+    return created_agent_id
+
+
 def get_or_create_agents():
     state = load_agent_state()
     shared_memory_block_id = get_or_create_shared_memory_block(state)
@@ -236,6 +298,10 @@ def get_or_create_agents():
     return {
         "main_agent_id": get_or_create_main_agent(state, shared_memory_block_id),
         "memory_manager_agent_id": get_or_create_memory_manager_agent(
+            state,
+            shared_memory_block_id,
+        ),
+        "vision_agent_id": get_or_create_vision_agent(
             state,
             shared_memory_block_id,
         ),
@@ -335,12 +401,13 @@ def send_message_to_agent(target_agent_id, message, client_tools=None):
 
 
 def ask_letta(message):
-    global main_agent_id, memory_manager_agent_id
+    global main_agent_id, memory_manager_agent_id, vision_agent_id
 
-    if main_agent_id is None or memory_manager_agent_id is None:
+    if main_agent_id is None or memory_manager_agent_id is None or vision_agent_id is None:
         agents = get_or_create_agents()
         main_agent_id = agents["main_agent_id"]
         memory_manager_agent_id = agents["memory_manager_agent_id"]
+        vision_agent_id = agents["vision_agent_id"]
 
     tool_context = (
         "If the user asks me to control my LEDs, matrix, face, light display, "
@@ -355,11 +422,13 @@ def ask_letta(message):
 
 
 def update_memory_in_background(user_message, assistant_response):
-    global memory_manager_agent_id
+    global main_agent_id, memory_manager_agent_id, vision_agent_id
 
-    if memory_manager_agent_id is None:
+    if memory_manager_agent_id is None or main_agent_id is None or vision_agent_id is None:
         agents = get_or_create_agents()
+        main_agent_id = agents["main_agent_id"]
         memory_manager_agent_id = agents["memory_manager_agent_id"]
+        vision_agent_id = agents["vision_agent_id"]
 
     prompt = (
         "Review this conversation turn and update shared_user_memory if useful.\n\n"
@@ -372,12 +441,13 @@ def update_memory_in_background(user_message, assistant_response):
 
 
 def run_memory_manager_idle_check():
-    global main_agent_id, memory_manager_agent_id
+    global main_agent_id, memory_manager_agent_id, vision_agent_id
 
-    if main_agent_id is None or memory_manager_agent_id is None:
+    if main_agent_id is None or memory_manager_agent_id is None or vision_agent_id is None:
         agents = get_or_create_agents()
         main_agent_id = agents["main_agent_id"]
         memory_manager_agent_id = agents["memory_manager_agent_id"]
+        vision_agent_id = agents["vision_agent_id"]
 
     prompt = (
         "The main chat agent is currently idle. Run an internal self-check as "

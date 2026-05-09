@@ -16,6 +16,14 @@ def execute_tool(tool_name, arguments):
             print("LED matrix cleared")
             return "Cleared my LED matrix.", "success"
 
+        if tool_name == "get_camera_status":
+            # Stub: in a real scenario, this would check the camera hardware or service
+            return "Camera is active and streaming.", "success"
+
+        if tool_name == "get_latest_detections":
+            # Stub: return some mock detected objects
+            return "Latest detections: Person (95%), Drone (80%).", "success"
+
         return f"Unknown client tool: {tool_name}", "error"
 
     except Exception as e:
