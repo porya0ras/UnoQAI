@@ -1,7 +1,7 @@
 import json
 from tools import led_matrix
 
-def execute_led_client_tool(tool_name, arguments):
+def execute_tool(tool_name, arguments):
     try:
         if isinstance(arguments, str):
             arguments = json.loads(arguments or "{}")
