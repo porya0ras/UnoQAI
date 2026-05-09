@@ -5,7 +5,7 @@ profiles:
     libraries:
       - Arduino_LED_Matrix
       - Arduino_Monitor
-      - Arduino_RouterBridge (0.3.0)
+      - Arduino_RouterBridges
       - dependency: Arduino_RPClite (0.2.1)
       - dependency: ArxContainer (0.7.0)
       - dependency: ArxTypeTraits (0.3.2)

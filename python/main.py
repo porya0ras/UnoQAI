@@ -1,90 +1,46 @@
 import json
-import os
 import re
 import threading
-from pathlib import Path
+import config
 
 from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App
 from letta_client import Letta
 
-import led_matrix
+import toolHnadler
 
-
-ROOT_DIR = Path(__file__).resolve().parent.parent
-AGENT_FILE = ROOT_DIR / "agent_state.json"
-
-LETTA_BASE_URL = os.getenv("LETTA_BASE_URL", "http://192.168.1.80:8283")
-LETTA_API_KEY = os.getenv("LETTA_API_KEY", "test")
-
-MODEL = os.getenv("LETTA_MODEL", "openai/gpt-4o-mini")
-EMBEDDING = os.getenv("LETTA_EMBEDDING", "openai/text-embedding-3-small")
-SHARED_MEMORY_LIMIT = int(os.getenv("LETTA_SHARED_MEMORY_LIMIT", "5000"))
-MEMORY_MANAGER_IDLE_SECONDS = int(os.getenv("MEMORY_MANAGER_IDLE_SECONDS", "90"))
 
 ui = WebUI()
 letta_client = Letta(
-    base_url=LETTA_BASE_URL,
-    api_key=LETTA_API_KEY,
+    base_url=config.LETTA_BASE_URL,
+    api_key=config.LETTA_API_KEY,
 )
 main_agent_id = None
 memory_manager_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
 
-LED_CLIENT_TOOLS = [
-    {
-        "name": "write_led_matrix_text",
-        "description": (
-            "Write short text on my Arduino UNO Q LED matrix. Use this whenever "
-            "the user asks me to write, show, display, say, draw, or put letters "
-            "or a word on my LEDs, matrix, face, light display, or little screen. "
-            "Pass the user's requested text exactly; the client will truncate or "
-            "scroll it to fit the tiny matrix."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "text": {
-                    "type": "string",
-                    "description": "The exact text the user asked to show, for example HI, OK, YES, HALEH.",
-                },
-            },
-            "required": ["text"],
-        },
-    },
-    {
-        "name": "clear_led_matrix",
-        "description": (
-            "Clear or turn off my Arduino UNO Q LED matrix when the user asks "
-            "to clear, erase, switch off, or turn off the LEDs, matrix, face, "
-            "or light display."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {},
-            "required": [],
-        },
-    },
-]
 
-LED_COMMAND_RE = re.compile(
-    r"\b(?:draw|write|show|display|say|put)\b.*?[`\"']([^`\"']+)[`\"']",
-    re.IGNORECASE,
-)
+def load_client_tools():
+    with config.CLIENT_TOOLS_FILE.open() as tools_file:
+        tools = json.load(tools_file)
 
+    if not isinstance(tools, list):
+        raise ValueError(f"{config.CLIENT_TOOLS_FILE} must contain a JSON array")
 
-def extract_direct_led_text(message):
-    match = LED_COMMAND_RE.search(message)
-    if match:
-        return match.group(1).strip()
+    for tool in tools:
+        if not isinstance(tool, dict):
+            raise ValueError("Each client tool must be a JSON object")
 
-    return None
+        if "name" not in tool or "description" not in tool or "parameters" not in tool:
+            raise ValueError("Each client tool must include name, description, and parameters")
+
+    return tools
 
 
 def load_agent_state():
-    if AGENT_FILE.exists():
-        state = json.loads(AGENT_FILE.read_text())
+    if config.AGENT_FILE.exists():
+        state = json.loads(config.AGENT_FILE.read_text())
 
         if "agent_id" in state and "main_agent_id" not in state:
             state["main_agent_id"] = state["agent_id"]
@@ -99,7 +55,7 @@ def load_agent_state():
 
 
 def save_agent_state(state):
-    AGENT_FILE.write_text(json.dumps(state, indent=2))
+    config.AGENT_FILE.write_text(json.dumps(state, indent=2))
 
 
 def create_shared_memory_block():
@@ -115,7 +71,7 @@ def create_shared_memory_block():
             "No durable user memories have been saved yet. Keep this block "
             "concise, factual, and useful for future conversations."
         ),
-        limit=SHARED_MEMORY_LIMIT,
+        limit=config.SHARED_MEMORY_LIMIT,
     )
 
     print(f"Created shared memory block: {block.id}")
@@ -154,8 +110,8 @@ def attach_shared_memory(agent_id, block_id):
 def create_main_agent(shared_memory_block_id):
     agent = letta_client.agents.create(
         name="uno-q-webui-agent",
-        model=MODEL,
-        embedding=EMBEDDING,
+        model=config.MODEL,
+        embedding=config.EMBEDDING,
         block_ids=[shared_memory_block_id],
         memory_blocks=[
             {
@@ -163,8 +119,6 @@ def create_main_agent(shared_memory_block_id):
                 "value": (
                     "You are a small personal AI assistant running on Arduino UNO Q. "
                     "Answer clearly and briefly. Ask one short question if needed. "
-                    "You can control your LED matrix with client-side tools when "
-                    "the user asks you to show text or clear your lights."
                 ),
             },
             {
@@ -185,6 +139,16 @@ def create_main_agent(shared_memory_block_id):
                     "Do not store secrets unless the user explicitly asks."
                 ),
             },
+            {
+                "label": "tool_usage_policy",
+                "value": (
+                    "Use client tools for controlling LEDs, matrix, face, light "
+                    "display, or little screen. Do not give Arduino code for those "
+                    "requests. If the user asks you to control your LEDs, matrix, "
+                    "face, light display, or little screen, use the available "
+                    "client-side LED tool. Do not give Arduino code for that request."
+                 ),
+            }
         ],
         tools=[
             "conversation_search",
@@ -198,8 +162,8 @@ def create_main_agent(shared_memory_block_id):
 def create_memory_manager_agent(shared_memory_block_id):
     agent = letta_client.agents.create(
         name="uno-q-memory-manager",
-        model=MODEL,
-        embedding=EMBEDDING,
+        model=config.MODEL,
+        embedding=config.EMBEDDING,
         block_ids=[shared_memory_block_id],
         memory_blocks=[
             {
@@ -294,28 +258,6 @@ def extract_response(response):
     except Exception:
         return str(response)
 
-
-def execute_led_client_tool(tool_name, arguments):
-    try:
-        if isinstance(arguments, str):
-            arguments = json.loads(arguments or "{}")
-
-        if tool_name == "write_led_matrix_text":
-            rendered_text = led_matrix.write_text(arguments.get("text", ""))
-            print(f"LED matrix text: {rendered_text}")
-            return f"Wrote '{rendered_text}' on my LED matrix.", "success"
-
-        if tool_name == "clear_led_matrix":
-            led_matrix.clear()
-            print("LED matrix cleared")
-            return "Cleared my LED matrix.", "success"
-
-        return f"Unknown client tool: {tool_name}", "error"
-
-    except Exception as e:
-        return str(e), "error"
-
-
 def get_message_type(message):
     return getattr(message, "message_type", None) or getattr(message, "type", None)
 
@@ -342,7 +284,7 @@ def resolve_client_tool_requests(target_agent_id, response, client_tools):
             tool_name = get_tool_call_value(tool_call, "name")
             tool_arguments = get_tool_call_value(tool_call, "arguments", "{}")
             tool_call_id = get_tool_call_value(tool_call, "tool_call_id")
-            result, status = execute_led_client_tool(tool_name, tool_arguments)
+            result, status = toolHnadler.execute_tool(tool_name, tool_arguments)
 
             approvals.append(
                 {
@@ -408,7 +350,7 @@ def ask_letta(message):
     return send_message_to_agent(
         main_agent_id,
         f"{tool_context}\n\nUser message: {message}",
-        client_tools=LED_CLIENT_TOOLS,
+        client_tools=load_client_tools(),
     )
 
 
@@ -481,7 +423,7 @@ def schedule_memory_update(user_message, assistant_response):
 def schedule_idle_memory_manager_check():
     global idle_timer
 
-    if MEMORY_MANAGER_IDLE_SECONDS <= 0:
+    if config.MEMORY_MANAGER_IDLE_SECONDS <= 0:
         return
 
     def run():
@@ -494,7 +436,7 @@ def schedule_idle_memory_manager_check():
         if idle_timer is not None:
             idle_timer.cancel()
 
-        idle_timer = threading.Timer(MEMORY_MANAGER_IDLE_SECONDS, run)
+        idle_timer = threading.Timer(config.MEMORY_MANAGER_IDLE_SECONDS, run)
         idle_timer.daemon = True
         idle_timer.start()
 
@@ -538,17 +480,6 @@ def on_chat_message(_sid, data):
 
         print(f"User: {message}")
 
-        direct_led_text = extract_direct_led_text(message)
-        if direct_led_text:
-            rendered_text = led_matrix.write_text(direct_led_text)
-            answer = f"I displayed '{rendered_text}' on my LED matrix."
-            print(f"LED matrix direct text: {rendered_text}")
-            print(f"Agent: {answer}")
-            send_agent_response(answer)
-            schedule_memory_update(message, answer)
-            schedule_idle_memory_manager_check()
-            return
-
         answer = ask_letta(message)
 
         print(f"Agent: {answer}")
@@ -563,8 +494,8 @@ def on_chat_message(_sid, data):
 
 
 print("Starting UNO Q WebUI Letta app...")
-print(f"Letta URL: {LETTA_BASE_URL}")
-print(f"Memory manager idle check: {MEMORY_MANAGER_IDLE_SECONDS}s")
+print(f"Letta URL: {config.LETTA_BASE_URL}")
+print(f"Memory manager idle check: {config.MEMORY_MANAGER_IDLE_SECONDS}s")
 
 ui.on_message("chat_message", on_chat_message)
 schedule_idle_memory_manager_check()
