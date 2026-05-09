@@ -9,6 +9,7 @@ from arduino.app_utils import App
 from letta_client import Letta
 
 import toolHnadler
+from vision_handler import VisionHandler
 
 
 ui = WebUI()
@@ -21,6 +22,21 @@ memory_manager_agent_id = None
 vision_agent_id = None
 idle_timer = None
 idle_timer_lock = threading.Lock()
+
+
+def get_vision_agent_id():
+    global vision_agent_id
+    if vision_agent_id is None:
+        agents = get_or_create_agents()
+        vision_agent_id = agents["vision_agent_id"]
+    return vision_agent_id
+
+
+# Extract host IP from LETTA_BASE_URL for camera streaming
+match = re.search(r"//([^:/]+)", config.LETTA_BASE_URL)
+host_ip = match.group(1) if match else "127.0.0.1"
+
+vision_handler = VisionHandler(get_vision_agent_id, send_message_to_agent, host=host_ip)
 
 
 def load_client_tools():
@@ -521,45 +537,6 @@ def cancel_idle_memory_manager_check():
             idle_timer = None
 
 
-def run_vision_loop():
-    """
-    Background loop for vision processing.
-    This runs in its own thread to avoid blocking the main chat and UI.
-    """
-    global main_agent_id, vision_agent_id
-
-    print("Vision processing thread started.")
-
-    while True:
-        try:
-            # 1. Simulate vision processing (e.g., checking for new frames)
-            # In a real setup, this would use OpenCV or a similar library.
-            time.sleep(15)  # Run vision check every 15 seconds for this sample
-
-            # 2. Ensure agents are initialized
-            if vision_agent_id is None:
-                agents = get_or_create_agents()
-                vision_agent_id = agents["vision_agent_id"]
-
-            # 3. Simulate a visual event (e.g., "Person detected")
-            # In your actual implementation, you'd get this from your vision model.
-            event_log = "Vision Alert: A person has been detected in the camera view."
-            print(f"[Vision] {event_log}")
-
-            # 4. Notify the Vision Agent (Q-Eye)
-            # Q-Eye is designed to handle vision policy and decide if the main agent should be notified.
-            response = send_message_to_agent(vision_agent_id, event_log)
-            print(f"[Vision Agent Response] {response}")
-
-            # 5. Optionally, if the vision agent response contains an instruction to notify the user,
-            # you can send it to the UI.
-            # Example:
-            # if "NOTIFY_USER" in response:
-            #     send_agent_response(response.replace("NOTIFY_USER", ""))
-
-        except Exception as e:
-            print(f"Error in vision loop: {e}")
-            time.sleep(5)
 
 
 def send_agent_error(error):
@@ -612,7 +589,7 @@ print(f"Memory manager idle check: {config.MEMORY_MANAGER_IDLE_SECONDS}s")
 ui.on_message("chat_message", on_chat_message)
 schedule_idle_memory_manager_check()
 
-# Start the vision processing thread
-threading.Thread(target=run_vision_loop, daemon=True).start()
+# Start the vision processing handler
+vision_handler.start()
 
 App.run()
