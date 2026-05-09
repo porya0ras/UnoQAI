@@ -1,1 +1,6 @@
 letta-client
+face_recognition
+opencv-python
+numpy
+requests
+python-dotenv
