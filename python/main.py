@@ -258,10 +258,6 @@ def extract_response(response):
     except Exception:
         return str(response)
 
-
-
-
-
 def get_message_type(message):
     return getattr(message, "message_type", None) or getattr(message, "type", None)
 
