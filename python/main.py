@@ -7,7 +7,7 @@ from arduino.app_bricks.web_ui import WebUI
 from arduino.app_utils import App
 from letta_client import Letta
 
-import led_matrix
+import toolHnadler
 
 
 ui = WebUI()
@@ -259,25 +259,7 @@ def extract_response(response):
         return str(response)
 
 
-def execute_led_client_tool(tool_name, arguments):
-    try:
-        if isinstance(arguments, str):
-            arguments = json.loads(arguments or "{}")
 
-        if tool_name == "write_led_matrix_text":
-            rendered_text = led_matrix.write_text(arguments.get("text", ""))
-            print(f"LED matrix text: {rendered_text}")
-            return f"Wrote '{rendered_text}' on my LED matrix.", "success"
-
-        if tool_name == "clear_led_matrix":
-            led_matrix.clear()
-            print("LED matrix cleared")
-            return "Cleared my LED matrix.", "success"
-
-        return f"Unknown client tool: {tool_name}", "error"
-
-    except Exception as e:
-        return str(e), "error"
 
 
 def get_message_type(message):
@@ -306,7 +288,7 @@ def resolve_client_tool_requests(target_agent_id, response, client_tools):
             tool_name = get_tool_call_value(tool_call, "name")
             tool_arguments = get_tool_call_value(tool_call, "arguments", "{}")
             tool_call_id = get_tool_call_value(tool_call, "tool_call_id")
-            result, status = execute_led_client_tool(tool_name, tool_arguments)
+            result, status = toolHnadler.execute_led_client_tool(tool_name, tool_arguments)
 
             approvals.append(
                 {
